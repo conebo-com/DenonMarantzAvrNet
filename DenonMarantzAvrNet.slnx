@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="DenonMarantzAvrNet/DenonMarantzAvrNet.csproj" />
+  <Project Path="DenonMarantzAvrNet.TesterGui/DenonMarantzAvrNet.TesterGui.csproj" Id="39151e0c-f95b-41d7-83ae-62400078b0a8" />
+</Solution>

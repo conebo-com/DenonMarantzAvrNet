@@ -1,0 +1,139 @@
+﻿<Window x:Class="DenonMarantzAvrNet.TesterGui.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:DenonMarantzAvrNet.TesterGui"
+        mc:Ignorable="d"
+        Title="Denon / Marantz AVR Tester" Height="780" Width="1150">
+    <Grid x:Name="GrdMain" Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel x:Name="StcConnection" Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+            <TextBlock x:Name="LblHost" Text="Host:" VerticalAlignment="Center" Margin="0,0,6,0" />
+            <TextBox x:Name="TxtHost" Width="180" Text="10.37.0.23" VerticalAlignment="Center" />
+            <Button x:Name="BtnConnect" Content="Connect" Width="90" Margin="8,0,0,0" Click="BtnConnect_Click" Focusable="False" />
+            <TextBlock x:Name="TxtConnectionStatus" Text="Not connected" VerticalAlignment="Center" Margin="12,0,0,0" />
+            <Button x:Name="BtnOpenWebPage" Content="Open receivers web page" Width="200" Margin="24,0,0,0" Click="BtnOpenWebPage_Click" />
+            <TextBlock x:Name="LblLanguage" Text="Language:" VerticalAlignment="Center" Margin="12,0,6,0" />
+
+            <StackPanel x:Name="StcLanguage" Orientation="Horizontal" VerticalAlignment="Center">
+                <ToggleButton x:Name="TglEnglish" Padding="4,2" Margin="0,0,4,0" Focusable="False"
+                              ToolTip="English" Click="TglEnglish_Click">
+                    <Image x:Name="ImgFlagEnglish" Source="Images/flag_us.png" Width="30" Height="16" />
+                </ToggleButton>
+                <ToggleButton x:Name="TglGerman" Padding="4,2" Focusable="False"
+                              ToolTip="Deutsch" Click="TglGerman_Click">
+                    <Image x:Name="ImgFlagGerman" Source="Images/flag_d.png" Width="30" Height="16" />
+                </ToggleButton>
+            </StackPanel>            
+            
+            <TextBlock x:Name="TxtCompatibilityMode" VerticalAlignment="Center" Margin="12,0,0,0"
+                       FontWeight="Bold" Foreground="DarkOrange" Visibility="Collapsed" />
+        </StackPanel>
+        
+        <Grid x:Name="GrdContent" Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="340" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Grid x:Name="GrdLeft" Grid.Column="0" Margin="0,0,8,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Border x:Name="BrdCommands" Grid.Row="0" BorderBrush="Gray" BorderThickness="1">
+                    <ListBox x:Name="LstCommands" SelectionChanged="LstCommands_SelectionChanged" MouseDoubleClick="LstCommands_MouseDoubleClick">
+                        <ListBox.GroupStyle>
+                            <GroupStyle>
+                                <GroupStyle.HeaderTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Name}" FontWeight="Bold" Background="LightGray" Padding="4,2" />
+                                    </DataTemplate>
+                                </GroupStyle.HeaderTemplate>
+                            </GroupStyle>
+                        </ListBox.GroupStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" Margin="12,0,0,0" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Border>
+
+                <StackPanel x:Name="StcParameters" Grid.Row="1" Margin="0,8,0,0" Visibility="Collapsed">
+                    <TextBlock x:Name="LblParameter1" TextWrapping="Wrap" Visibility="Collapsed" />
+                    <TextBox x:Name="TxtParameter1" Margin="0,2,0,6" Visibility="Collapsed" />
+                    <TextBlock x:Name="LblParameter2" TextWrapping="Wrap" Visibility="Collapsed" />
+                    <TextBox x:Name="TxtParameter2" Margin="0,2,0,6" Visibility="Collapsed" />
+
+                    <StackPanel x:Name="StcProtocol" Visibility="Collapsed">
+                        <TextBlock x:Name="LblProtocol" Text="Protocol" />
+                        <ComboBox x:Name="CmbProtocol" Margin="0,2,0,6" />
+                    </StackPanel>
+                    
+                </StackPanel>
+
+                <Button x:Name="BtnSend" Grid.Row="2" Content="Send" Height="30" Margin="0,8,0,0" Click="BtnSend_Click" Focusable="False" />
+            </Grid>
+
+            <Grid x:Name="GrdOutputs" Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock x:Name="LblResult" Grid.Row="0" Text="Result" FontWeight="Bold" />
+                <TextBox x:Name="TxtResult" Grid.Row="1" IsReadOnly="True" FontFamily="Consolas"
+                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Margin="0,2,0,8" />
+
+                <TextBlock x:Name="LblHttpOutput" Grid.Row="2" Text="HTTP output" FontWeight="Bold" />
+                <TextBox x:Name="TxtHttpOutput" Grid.Row="3" IsReadOnly="True" FontFamily="Consolas"
+                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Margin="0,2,0,8" />
+
+                <TextBlock x:Name="LblTelnetOutput" Grid.Row="4" Text="Telnet output" FontWeight="Bold" />
+                <TextBox x:Name="TxtTelnetOutput" Grid.Row="5" IsReadOnly="True" FontFamily="Consolas"
+                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Margin="0,2,0,8" />
+
+                <Grid x:Name="GrdOutputButtons" Grid.Row="6">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Border x:Name="BrdSupportReportHint" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3"
+                            Margin="0,4,0,10" Padding="12,10" CornerRadius="4"
+                            Background="#E8F1FB" BorderBrush="#2F6DB5" BorderThickness="1">
+                        <TextBlock x:Name="TxtSupportReportHint" TextWrapping="Wrap"
+                                   FontSize="15" FontWeight="Bold" Foreground="#1F4E8C"
+                                   Text="Help the project: check whether your receiver is compatible with the functions offered here. Only read-only operations are run against your receiver, and you can send the result to the project by e-mail. Nothing is sent automatically and nothing is changed on the receiver." />
+                    </Border>
+                    <CheckBox x:Name="ChkClearTrafficBeforeOperation" Grid.Row="1" Grid.Column="0"
+                              Content="Clear HTTP / Telnet output before every operation"
+                              VerticalAlignment="Center" />
+                    <Button x:Name="BtnSupportReport" Grid.Row="1" Grid.Column="1" Content="Check receiver compatibility..."
+                            Padding="16,6" Margin="0,0,8,0" FontSize="14" FontWeight="Bold"
+                            Click="BtnSupportReport_Click" />
+                    <Button x:Name="BtnClear" Grid.Row="1" Grid.Column="2" Content="Clear outputs" Width="120"
+                            Click="BtnClear_Click" />
+                </Grid>
+
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>
