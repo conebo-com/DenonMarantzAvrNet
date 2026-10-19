@@ -22,6 +22,8 @@ namespace DenonMarantzAvrNet.TesterGui
     /// </summary>
     public partial class MainWindow : Window
     {
+        public const string EMail = "contact@conebo.com";
+
         private static string CommandSentText => Loc.Get("Command sent. This command returns no response text.");
         private static string VersionText => Assembly.GetExecutingAssembly()
                 .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? string.Empty;

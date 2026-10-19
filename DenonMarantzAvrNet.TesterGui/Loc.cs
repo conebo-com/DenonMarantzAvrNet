@@ -138,9 +138,11 @@ namespace DenonMarantzAvrNet.TesterGui
 
             // JsonPreviewWindow
             ["Check report before sending"] = "Bericht vor dem Senden prüfen",
-            ["This is the report for the compatibility check of your receiver. Please read it and make sure you are happy with its content.\n1. Click 'Copy to clipboard'.\n2. Paste the report into an e-mail to 3dsound@sappert.com and send it yourself.\nNothing is sent automatically."] = "Dies ist der Bericht zur Kompatibilitätsprüfung Ihres Receivers. Bitte lesen Sie ihn durch und stellen Sie sicher, dass Sie mit dem Inhalt einverstanden sind.\n1. Klicken Sie auf 'In die Zwischenablage kopieren'.\n2. Fügen Sie den Bericht in eine E-Mail an 3dsound@sappert.com ein und senden Sie sie selbst ab.\nEs wird nichts automatisch gesendet.",
+            ["This is the report for the compatibility check of your receiver. Please read it and make sure you are happy with its content.\n1. Click 'Copy to clipboard'.\n2. Paste the report into an e-mail to {0} and send it yourself.\nNothing is sent automatically."] = "Dies ist der Bericht zur Kompatibilitätsprüfung Ihres Receivers. Bitte lesen Sie ihn durch und stellen Sie sicher, dass Sie mit dem Inhalt einverstanden sind.\n1. Klicken Sie auf 'In die Zwischenablage kopieren'.\n2. Fügen Sie den Bericht in eine E-Mail an {0} ein und senden Sie sie selbst ab.\nEs wird nichts automatisch gesendet.",
             ["Copy to clipboard"] = "In die Zwischenablage kopieren",
             ["Close"] = "Schließen",
+            ["Please send this report to us by e-mail: {0}"] = "Bitte senden Sie uns diesen Bericht per E-Mail: {0}",
+            ["This supports the open source project. Thank you very much!"] = "Damit unterstützen Sie das Open-Source-Projekt. Vielen Dank!",
             ["Copied to the clipboard."] = "In die Zwischenablage kopiert.",
             ["The clipboard is currently not available: {0}"] = "Die Zwischenablage ist derzeit nicht verfügbar: {0}",
             ["Please try again, or select the text and copy it with Ctrl+C."] = "Bitte versuchen Sie es erneut oder markieren Sie den Text und kopieren Sie ihn mit Strg+C.",
@@ -153,7 +155,7 @@ namespace DenonMarantzAvrNet.TesterGui
             ["Type of your receiver:"] = "Typ Ihres Receivers:",
             ["<select a profile>"] = "<Profil auswählen>",
             ["Accept"] = "Übernehmen",
-            ["Cancel"] = "Abbrechen"
+            ["Cancel"] = "Abbrechen" 
         };
 
         static Loc()

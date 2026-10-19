@@ -9,12 +9,14 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <Border x:Name="BrdHint" Grid.Row="0" Margin="0,0,0,8" Padding="12,10" CornerRadius="4"
                 Background="#E8F1FB" BorderBrush="#2F6DB5" BorderThickness="1">
-            <TextBlock x:Name="TxtHint" TextWrapping="Wrap"
+            <TextBox x:Name="TxtHint" TextWrapping="Wrap"
                        FontSize="15" FontWeight="Bold" Foreground="#1F4E8C"
+                     IsReadOnly="True"
                        Text="This is the report for the compatibility check of your receiver. Please read it and make sure you are happy with its content.&#10;1. Click 'Copy to clipboard'.&#10;2. Paste the report into an e-mail to 3dsound@sappert.com and send it yourself.&#10;Nothing is sent automatically." />
         </Border>
         
@@ -35,5 +37,11 @@
             <Button x:Name="BtnClose" Grid.Column="2" Content="Close" Width="90" Height="30"
                     IsCancel="True" Click="BtnClose_Click" />
         </Grid>
+
+        <TextBox x:Name="TxtMailRequest" Grid.Row="3" Margin="0,8,0,0" IsReadOnly="True"
+                 TextWrapping="Wrap" FontWeight="Bold" BorderThickness="0"
+                 AcceptsReturn="True"
+                 Background="Transparent" />
+
     </Grid>
 </Window>
