@@ -32,6 +32,7 @@ internal static class Program
             TestXmlRejectsUnsafeAndAmbiguousResponses();
             TestReadOnlyTransportAndPartialFailures();
             TestTelnetResponseCorrelation();
+            TestExactModeRestoration();
             TestTelnetLoopbackSession();
             TestReceiverProfileSelection();
             TestAppCommandResponseClassification();
@@ -52,7 +53,7 @@ internal static class Program
             TestLegacyCalibrationGetOnly();
             TestUnifiedCalibrationPayloads();
             TestCanonicalSpeakerChannelCodes();
-            Console.WriteLine("Discovery/transport: 27 tests passed.");
+            Console.WriteLine("Discovery/transport: 28 tests passed.");
             return 0;
         }
         catch (Exception exception)
@@ -102,6 +103,17 @@ internal static class Program
             "<tr><td>Manually adjusts the levels for each channel <B>Front L</B>");
         Check(DenonLegacySpeakerCalibrationReader.ParseLevels(malformed)[0].DisplayName == "Front L",
             "Help text must not contaminate a channel label.");
+    }
+
+    private static void TestExactModeRestoration()
+    {
+        Check(DenonTelnetResponseMatcher.IsExactSoundModeStatus("MSDTS NEO:X G", "MSDTS NEO:X G"),
+            "Restored DTS Neo:X G mode should match original MS status.");
+        Check(!DenonTelnetResponseMatcher.IsExactSoundModeStatus("MSDTS NEO:X G", "MSSTEREO"),
+            "Any other MS status must NOT be marked as a verified restore.");
+        Check(!DenonTelnetResponseMatcher.IsExactSoundModeStatus("MS?", "MSSTEREO") &&
+              !DenonTelnetResponseMatcher.IsExactSoundModeStatus("", "MSSTEREO"),
+            "Empty or query-only mode is not a valid original sound mode.");
     }
 
     private static void TestCanonicalSpeakerChannelCodes()

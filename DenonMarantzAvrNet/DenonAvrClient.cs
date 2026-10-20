@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.Sockets;
 using System.Net.Http;
 using DenonMarantzAvrNet.Protocol;
@@ -1199,12 +1199,10 @@ public sealed class DenonAvrClient : IDisposable
             _ = await _httpTransport.PostFormAsync(Host, port,
                 "/SETUP/SPEAKERS/LEVELS/s_speakersetup.asp", form, cancellationToken).ConfigureAwait(false);
         }
-        var verified = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
-        var actual = verified.Channels.SingleOrDefault(x =>
-            string.Equals(x.NativeChannelCode, nativeChannelCode, StringComparison.OrdinalIgnoreCase));
-        var confirmedLevel = actual?.LevelDecibels;
-        if (!confirmedLevel.HasValue || Math.Abs(confirmedLevel.Value - decibels) > 0.01)
-            throw new InvalidOperationException("Level write was sent but NOT confirmed by readback.");
+        if (!await VerifyCalibrationReadbackAsync(nativeChannelCode, decibels,
+                isDistance: false, cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("Level write attempted, but target value was NOT confirmed after three readbacks. " +
+                "The AVR may still have changed; read the current value before retrying.");
     }
 
     /// <summary>Changes a persistent distance in meters, with explicit legacy opt-in and readback.</summary>
@@ -1241,12 +1239,43 @@ public sealed class DenonAvrClient : IDisposable
                 "/SETUP/SPEAKERS/DISTANCES/s_speakersetup.asp", form, cancellationToken)
                 .ConfigureAwait(false);
         }
-        var verified = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
-        var actual = verified.Channels.SingleOrDefault(x =>
-            string.Equals(x.NativeChannelCode, nativeChannelCode, StringComparison.OrdinalIgnoreCase));
-        var confirmedDistance = actual?.DistanceMeters;
-        if (!confirmedDistance.HasValue || Math.Abs(confirmedDistance.Value - meters) > 0.035)
-            throw new InvalidOperationException("Distance write was sent but NOT confirmed by readback.");
+        if (!await VerifyCalibrationReadbackAsync(nativeChannelCode, meters,
+                isDistance: true, cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("Distance write attempted, but target value was NOT confirmed after three readbacks. " +
+                "The AVR may still have changed; read the current value before retrying.");
+    }
+
+    /// <summary>
+    /// Re-read the actual stored value up to three times. A POST/HTTP 200 alone
+    /// is not evidence that the receiver accepted a calibration change.
+    /// </summary>
+    private async Task<bool> VerifyCalibrationReadbackAsync(string nativeChannelCode,
+        double expected, bool isDistance, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (attempt > 0)
+                await Task.Delay(350, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var snapshot = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
+                var found = snapshot.Channels.SingleOrDefault(x =>
+                    string.Equals(x.NativeChannelCode, nativeChannelCode,
+                        StringComparison.OrdinalIgnoreCase));
+                var value = isDistance ? found?.DistanceMeters : found?.LevelDecibels;
+                if (value.HasValue && Math.Abs(value.Value - expected) <=
+                    (isDistance ? 0.035 : 0.01))
+                    return true;
+            }
+            catch (Exception ex) when (attempt < 2 &&
+                (ex is System.Net.Http.HttpRequestException || ex is IOException ||
+                 ex is InvalidDataException || ex is TimeoutException))
+            {
+                // A legacy receiver can be briefly unavailable while saving.
+            }
+        }
+        return false;
     }
 
     /// <summary>Reads the active speaker-preset levels using the selected receiver profile.</summary>

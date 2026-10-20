@@ -42,3 +42,30 @@ The new setters are `SetCalibrationLevelAsync(nativeCode, dB, allowExperimentalL
 5. Optionally, **after backup**, test one explicitly confirmed level or distance write and verify the original value can be restored. This step is **not required** to validate reads and sound families.
 
 Actual Windows compilation and receiver write behavior are not asserted by these source-level changes. Other legacy receiver web structures require separate evidence before blanket compatibility can be claimed.
+
+## Final hardware verification (2026-10-20)
+
+The AVR-X4100W Telnet capture confirms all five remote families: Movie -> Dolby Surround,
+Music -> Stereo, Game -> DTS Neo:X G, Direct -> Direct, Pure Direct -> Pure Direct.
+Sound family switches are independent of the selected codec. `OPSMLALL` remains an
+optional unverified feature on this legacy model.
+
+The one-pass mode test now sends the original `MS` mode and retries `MS?` up to three
+times. It reports **RESTORE VERIFIED** only if the full returned `MS` status matches
+the original. A different `MS...` message is never counted as restored.
+
+The earlier X4100W HTTP log shows POST submissions for levels/distances, but the
+values submitted were unchanged, so it cannot prove real write capability. The GUI
+now offers **ONE-PASS calibration level test (+/-0.5 dB, auto-restore)**. It uses
+one named native channel (default `FL`), requires explicit confirmation, temporarily
+changes the value by precisely 0.5 dB, verifies the readback, then tries to restore
+the original value. It also compares the remaining levels with the baseline. No
+write is included in the compatibility report.
+
+**Caution:** Restoration is best effort, not transactional. If network/power is lost,
+the device rejects a write, or the process is closed, the user must verify and
+possibly restore the saved speaker setup manually. A changed value is not called
+verified without readback, and a successful HTTP POST does not establish persistence.
+The setter now retries live readback up to three times to tolerate delayed device
+updates. Distance writing remains guarded/experimental on legacy units until a
+real changed distance has been confirmed and restored.

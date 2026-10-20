@@ -452,6 +452,9 @@ namespace DenonMarantzAvrNet.TesterGui
 
                 new(speakersGroup, Loc.Get("Discover native speaker indices (read-only)"), false, [], _ => ShowSpeakerDiscoveryAsync()),
                 new(speakersGroup, "Calibration (AUTO: HTML / AJAX, read only)", false, [], _ => ShowUnifiedCalibrationAsync()),
+                new(speakersGroup, "ONE-PASS calibration level test (+/-0.5 dB, auto-restore)", false,
+                    [new("Channel code (FL, C, SW, TML...)", "FL")],
+                    input => OnePassCalibrationLevelAsync(input.Parameter1)),
                 new(speakersGroup, "Set CALIBRATION level (native code, guarded)", false,
                     [new("Channel code (FL, C, SW, TML...)", "FL"), new("dB (-12..+12 in 0.5 steps)", "-6.0")],
                     input => SetUnifiedCalibrationAsync(input, false)),
@@ -661,9 +664,8 @@ namespace DenonMarantzAvrNet.TesterGui
         }
 
         /// <summary>
-        /// One intentionally interactive test of the five remote sound families.
-        /// Does not touch persistent calibration. Restores the original mode
-        /// using the actual MS? response, even if an intermediate family fails.
+        /// Exercises the five sound family buttons and verifies the old MS status
+        /// after restoration. An MS response for a different mode is a failure.
         /// </summary>
         private async Task<string> OnePassSoundFamiliesAsync()
         {
@@ -705,17 +707,142 @@ namespace DenonMarantzAvrNet.TesterGui
                     {
                         var restored = await Telnet.SetSurroundModeAsync(oldResponse.Substring(2),
                             CancellationToken.None);
-                        var actual = await Telnet.QuerySurroundModeAsync(CancellationToken.None);
-                        output.AppendLine("Restore: " + restored + "; actual=" + actual);
+                        string actual = "(no status)";
+                        var confirmed = false;
+                        for (var attempt = 0; attempt < 3; attempt++)
+                        {
+                            if (attempt > 0)
+                                await Task.Delay(250, CancellationToken.None);
+                            actual = await Telnet.QuerySurroundModeAsync(CancellationToken.None);
+                            if (DenonSoundModeSelectionResult.IsSameModeStatus(
+                                oldResponse, actual))
+                            {
+                                confirmed = true;
+                                break;
+                            }
+                        }
+                        output.AppendLine("Restore command: " + restored + "; actual=" + actual);
+                        output.AppendLine(confirmed ? "RESTORE VERIFIED: original MS status matches." :
+                            "WARNING: RESTORE NOT VERIFIED. Check the receiver manually.");
                     }
                     catch (Exception ex)
                     {
-                        output.AppendLine("WARNING: Restore failed: " + ex.Message +
+                        output.AppendLine("WARNING: RESTORE FAILED: " + ex.Message +
                             " (check sound mode at receiver)");
                     }
                 }
+                else
+                {
+                    output.AppendLine("WARNING: Initial MS status missing; restoration not possible.");
+                }
             }
             return output.ToString();
+        }
+
+        /// <summary>
+        /// Single-channel persistent level round trip: change by exactly 0.5 dB,
+        /// verify the changed value, then restore the original value and verify
+        /// again. This is deliberately separate from the read-only support report.
+        /// </summary>
+        private async Task<string> OnePassCalibrationLevelAsync(string channelInput)
+        {
+            var channel = channelInput.Trim().ToUpperInvariant();
+            if (channel.Length == 0)
+                throw new ArgumentException("Enter a native speaker code (e.g. FL).");
+            var receiver = Client;
+            var baseline = await receiver.GetSpeakerCalibrationAsync(Token);
+            var original = baseline.Channels.SingleOrDefault(x =>
+                string.Equals(x.NativeChannelCode, channel, StringComparison.OrdinalIgnoreCase));
+            if (original?.LevelDecibels is not double before)
+                throw new ArgumentException("Channel has no persistent calibration level: " + channel);
+            if (before < -12 || before > 12 || Math.Abs(before * 2 - Math.Round(before * 2)) > 0.001)
+                throw new InvalidOperationException("Receiver reported an unexpected calibration step/range.");
+            var proposed = before <= 11.5 ? before + 0.5 : before - 0.5;
+            var isLegacy = baseline.Source.StartsWith("Legacy", StringComparison.Ordinal);
+            var question = $"TEST ONLY: {channel} calibration {before:0.0} -> {proposed:0.0} dB, " +
+                "then restore the original value automatically.\n\n" +
+                "This temporarily CHANGES stored speaker setup values. " +
+                "If receiver/network connectivity is lost, automatic restoration may fail. " +
+                "Record your existing settings first. Continue?";
+            if (MessageBox.Show(question, "CONFIRM persistent calibration round trip",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                return "Cancelled. No calibration settings changed.";
+
+            var result = new StringBuilder();
+            result.AppendLine("Source: " + baseline.Source);
+            result.AppendLine($"Channel {channel}: before={before:0.0} dB; test={proposed:0.0} dB");
+            try
+            {
+                await receiver.SetCalibrationLevelAsync(channel, proposed, isLegacy, Token);
+                result.AppendLine("TEST CHANGE VERIFIED by receiver readback.");
+            }
+            catch (Exception ex)
+            {
+                result.AppendLine("TEST CHANGE FAILED / UNVERIFIED: " + ex.GetType().Name +
+                    ": " + ex.Message);
+            }
+            finally
+            {
+                // Always investigate the actual level after an attempted write.
+                // A failed verification does not imply that the POST had no effect.
+                var restorationNeeded = true;
+                try
+                {
+                    var afterWrite = await receiver.GetSpeakerCalibrationAsync(CancellationToken.None);
+                    var observed = afterWrite.Channels.SingleOrDefault(x =>
+                        string.Equals(x.NativeChannelCode, channel, StringComparison.OrdinalIgnoreCase))?.LevelDecibels;
+                    result.AppendLine("Readback after test: " +
+                        (observed.HasValue ? observed.Value.ToString("0.0", CultureInfo.InvariantCulture) : "unknown"));
+                    restorationNeeded = !observed.HasValue || Math.Abs(observed.Value - before) > 0.01;
+                }
+                catch (Exception ex)
+                {
+                    result.AppendLine("WARNING: Cannot determine current level (" + ex.Message +
+                        "); attempting to restore saved value anyway.");
+                }
+                if (restorationNeeded)
+                {
+                    try
+                    {
+                        result.AppendLine("Restoring original value now ...");
+                        await receiver.SetCalibrationLevelAsync(channel, before, isLegacy,
+                            CancellationToken.None);
+                        result.AppendLine("Restore POST and readback completed.");
+                    }
+                    catch (Exception ex)
+                    {
+                        result.AppendLine("WARNING: RESTORE FAILED OR COULD NOT BE VERIFIED: " +
+                            ex.Message + ". Check and restore manually if necessary!");
+                    }
+                }
+                else
+                    result.AppendLine("Original value still present; no restore POST needed.");
+            }
+            try
+            {
+                var final = await receiver.GetSpeakerCalibrationAsync(CancellationToken.None);
+                var value = final.Channels.SingleOrDefault(x =>
+                    string.Equals(x.NativeChannelCode, channel, StringComparison.OrdinalIgnoreCase))?.LevelDecibels;
+                if (!value.HasValue || Math.Abs(value.Value - before) > 0.01)
+                    result.AppendLine("WARNING: ORIGINAL LEVEL NOT CONFIRMED! Check speaker setup manually.");
+                else
+                    result.AppendLine("RESTORE VERIFIED: original channel level is back.");
+                foreach (var previous in baseline.Channels.Where(x => x.LevelDecibels.HasValue))
+                {
+                    var after = final.Channels.FirstOrDefault(x =>
+                        string.Equals(x.NativeChannelCode, previous.NativeChannelCode,
+                            StringComparison.OrdinalIgnoreCase));
+                    if (after?.LevelDecibels is not double actual ||
+                        Math.Abs(actual - previous.LevelDecibels!.Value) > 0.01)
+                        result.AppendLine("WARNING: Another channel differs/was not read: " +
+                            previous.NativeChannelCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                result.AppendLine("WARNING: FINAL READBACK FAILED: " + ex.Message);
+            }
+            return result.ToString();
         }
 
         private async Task<string> ShowUnifiedCalibrationAsync()

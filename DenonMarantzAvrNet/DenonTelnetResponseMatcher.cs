@@ -7,6 +7,13 @@ namespace DenonMarantzAvrNet;
 /// </summary>
 internal static class DenonTelnetResponseMatcher
 {
+    /// <summary>
+    /// Verifies a restored listening mode against the original complete MS status.
+    /// A response from another MS mode must never count as restored.
+    /// </summary>
+    internal static bool IsExactSoundModeStatus(string expected, string actual) =>
+        Models.DenonSoundModeSelectionResult.IsSameModeStatus(expected, actual);
+
     internal static bool IsResponse(string command, string response)
     {
         if (string.IsNullOrWhiteSpace(command) || string.IsNullOrWhiteSpace(response))

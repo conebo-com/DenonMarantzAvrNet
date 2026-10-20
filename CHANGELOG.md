@@ -67,3 +67,11 @@
 - Added WPF one-pass sound family test with attempted restoration, a unified speaker calibration view and explicit confirmation for persistent writes.
 - Fixed legacy HTML speaker label extraction and canonical SW2/SW3/SW4 speaker naming; added offline payload and mapping checks.
 - .NET Framework 4.8 remains the sole target. Windows builds and hardware WRITE tests are required before claiming complete write support.
+
+## Final sound-mode and calibration verification (2026-10-20)
+
+- Verify sound-mode restoration with an exact `MS?` comparison (up to three reads); report failure when the restored mode differs.
+- Add explicitly confirmed one-pass single-channel calibration level test (+/-0.5 dB) with best-effort restoration and checks of unchanged channels.
+- Retry speaker calibration readback up to three times before deciding an HTTP write remains unverified.
+- Add regression coverage for exact mode restoration; update the integration documentation.
+- Preserve the .NET Framework 4.8 target and keep persistent writes out of read-only compatibility reports.

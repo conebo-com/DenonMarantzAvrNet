@@ -507,3 +507,13 @@ The WPF GUI has a new `Calibration (AUTO: HTML / AJAX, read only)` command and a
 `OPSMLALL` read query may be unavailable on older Denon units and does not
 indicate that MOVIE/MUSIC/GAME/PURE buttons are unsupported. Refer to
 `docs/INTEGRATED-CALIBRATION-AND-SOUNDMODES.md` for limitations and safety.
+
+### Final one-pass hardware check
+
+The WPF tester includes `ONE-PASS calibration level test (+/-0.5 dB, auto-restore)`.
+This interactive operation temporarily changes a **persistent** channel calibration
+value (default `FL`), verifies readback, and attempts to restore the original value.
+It is **not** part of the read-only compatibility report. Always record/backup the
+receiver settings before running it; restoration cannot be guaranteed if the receiver
+or network becomes unavailable. The `ONE-PASS Sound family test` also verifies the
+restored `MS?` mode explicitly.
