@@ -64,6 +64,11 @@ internal static class DenonReceiverProfileRegistry
             // <-----------
         }
 
+        if (string.Equals(profileId.Trim(), Legacy.Id, StringComparison.OrdinalIgnoreCase))
+            return Legacy;
+        if (string.Equals(profileId.Trim(), Unknown.Id, StringComparison.OrdinalIgnoreCase))
+            return Unknown;
+
         return null;
         // <-----------
     }

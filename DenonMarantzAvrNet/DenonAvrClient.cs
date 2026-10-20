@@ -80,6 +80,12 @@ public sealed class DenonAvrClient : IDisposable
     /// <summary>Gets the HTTP port detected by <see cref="InitializeAsync"/>.</summary>
     public int? HttpPort { get; private set; }
 
+    /// <summary>Port which actually answered AppCommand.xml, independently discovered.</summary>
+    public int? AppCommandPort { get; private set; }
+
+    /// <summary>Port which actually answered AppCommand0300.xml with useful data.</summary>
+    public int? AppCommand0300Port { get; private set; }
+
     /// <summary>Gets the device information returned by the last initialization.</summary>
     public DenonDeviceInfo? DeviceInfo { get; private set; }
 
@@ -128,7 +134,12 @@ public sealed class DenonAvrClient : IDisposable
                 HttpPort = port;
                 DeviceInfo = deviceInfo;
                 _receiverProfile = DenonReceiverProfileRegistry.Select(deviceInfo, port);
-                ReceiverCapabilities = CreateReceiverCapabilities(deviceInfo, port);
+                AppCommandPort = null;
+                AppCommandPort = await DiscoverAppCommandPortAsync(port, cancellationToken)
+                    .ConfigureAwait(false);
+                AppCommand0300Port = null;
+                ReceiverCapabilities = CreateReceiverCapabilities(
+                    deviceInfo, AppCommandPort is not null);
                 State = null;
                 _availableInputs = null;
                 _speakerLevelSnapshot = null;
@@ -181,65 +192,67 @@ public sealed class DenonAvrClient : IDisposable
     public async Task<DenonReceiverState> UpdateAsync(CancellationToken cancellationToken = default)
     {
         var port = GetInitializedPort();
+        DenonReceiverState mainZone;
 
-        if (port == 8080)
+        if (ReceiverCapabilities?.SupportsAppCommand == true)
         {
-            var availableInputs = _availableInputs ??
-                await RefreshInputsAsync(cancellationToken).ConfigureAwait(false);
-            var mainZoneState = await QueryMainZoneStatusAsync(
-                port,
-                availableInputs,
-                cancellationToken).ConfigureAwait(false);
-            var audioInfoXml = await TryQueryAppCommand0300Async(
-                port,
-                DenonAppCommand.CreateDetailedRequest(
-                    DenonAppCommand.GetAudioInfo,
-                    "inputmode",
-                    "output",
-                    "signal",
-                    "sound",
-                    "fs"),
-                cancellationToken).ConfigureAwait(false);
-            var activeSpeakersXml = await TryQueryAppCommand0300Async(
-                port,
-                DenonAppCommand.CreateDetailedRequest(
-                    DenonAppCommand.GetActiveSpeaker,
-                    "activespall"),
-                cancellationToken).ConfigureAwait(false);
-
-            State = mainZoneState with
+            try
             {
-                Audio = DenonXmlParser.ParseAppCommandAudioInfo(
-                    audioInfoXml,
-                    activeSpeakersXml)
-            };
-            var capabilities = ReceiverCapabilities;
-            if (capabilities is not null)
+                var availableInputs = _availableInputs ??
+                    await RefreshInputsAsync(cancellationToken).ConfigureAwait(false);
+                mainZone = await QueryMainZoneStatusAsync(
+                    port, availableInputs, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
+                (exception is DenonProtocolException || exception is HttpRequestException))
             {
-                ReceiverCapabilities = capabilities with
-                {
-                    SupportsAppCommand0300 = audioInfoXml is not null || activeSpeakersXml is not null
-                };
+                // A partially compatible AppCommand endpoint must not break the
+                // legacy MainZone status reader. Keep its support flag, because
+                // individual commands may still work on this receiver.
+                mainZone = await QueryLegacyMainZoneAsync(port, cancellationToken).ConfigureAwait(false);
             }
         }
         else
         {
-            var xml = await _httpTransport.GetStringAsync(
-                Host,
-                port,
-                DenonEndpoints.MainZoneStatus,
-                cancellationToken).ConfigureAwait(false);
-
-            State = DenonXmlParser.ParseMainZoneStatus(xml);
-            _availableInputs = State.AvailableInputs;
-            var capabilities = ReceiverCapabilities;
-            if (capabilities is not null)
-            {
-                ReceiverCapabilities = capabilities with { SupportsAppCommand0300 = false };
-            }
+            mainZone = await QueryLegacyMainZoneAsync(port, cancellationToken).ConfigureAwait(false);
         }
 
+        // Probe 0300 independently of port AND of AppCommand.xml. A port 80
+        // receiver may expose detailed status even when the basic API differs.
+        var audioInfoXml = (ReceiverCapabilities?.SupportsAppCommand0300 != false)
+            ? await TryQueryAppCommand0300Async(
+                port,
+                DenonAppCommand.CreateDetailedRequest(
+                    DenonAppCommand.GetAudioInfo,
+                    "inputmode", "output", "signal", "sound", "fs"),
+                cancellationToken).ConfigureAwait(false)
+            : null;
+        var activeSpeakersXml = (ReceiverCapabilities?.SupportsAppCommand0300 != false)
+            ? await TryQueryAppCommand0300Async(
+                port,
+                DenonAppCommand.CreateDetailedRequest(
+                    DenonAppCommand.GetActiveSpeaker, "activespall"),
+                cancellationToken).ConfigureAwait(false)
+            : null;
+
+        var audio = DenonXmlParser.ParseAppCommandAudioInfo(audioInfoXml, activeSpeakersXml);
+        State = mainZone with { Audio = audio };
+        if (ReceiverCapabilities is { } capabilities)
+            ReceiverCapabilities = capabilities with
+            {
+                SupportsAppCommand0300 = audioInfoXml is not null || activeSpeakersXml is not null
+            };
         return State;
+    }
+
+    private async Task<DenonReceiverState> QueryLegacyMainZoneAsync(
+        int port, CancellationToken cancellationToken)
+    {
+        var xml = await _httpTransport.GetStringAsync(
+            Host, port, DenonEndpoints.MainZoneStatus, cancellationToken).ConfigureAwait(false);
+        var state = DenonXmlParser.ParseMainZoneStatus(xml);
+        _availableInputs = state.AvailableInputs;
+        return state;
     }
 
     /// <summary>
@@ -328,7 +341,7 @@ public sealed class DenonAvrClient : IDisposable
             ReceiverCapabilities = capabilities with { SupportsTelnet = true };
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
-                                          exception is IOException or SocketException or TaskCanceledException)
+                                          exception is IOException or SocketException or OperationCanceledException)
         {
             ReceiverCapabilities = capabilities with { SupportsTelnet = false };
         }
@@ -343,32 +356,36 @@ public sealed class DenonAvrClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         var port = GetInitializedPort();
-        IReadOnlyList<string> inputs;
+        IReadOnlyList<string>? inputs = null;
 
-        if (port == 8080)
+        if (ReceiverCapabilities?.SupportsAppCommand == true)
         {
-            var xml = await QueryAppCommandAsync(
-                port,
-                DenonAppCommand.GetDeletedSource,
-                cancellationToken).ConfigureAwait(false);
-            inputs = DenonXmlParser.ParseAppCommandAvailableInputs(xml);
+            try
+            {
+                var xml = await QueryAppCommandAsync(
+                    port, DenonAppCommand.GetDeletedSource, cancellationToken).ConfigureAwait(false);
+                if (DenonXmlParser.HasAppCommandData(xml))
+                {
+                    inputs = DenonXmlParser.ParseAppCommandAvailableInputs(xml);
+                }
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
+                (exception is HttpRequestException || exception is DenonProtocolException))
+            {
+                // Use older MainZone input list if this individual command is unsupported.
+            }
         }
-        else
+
+        if (inputs is null)
         {
             var xml = await _httpTransport.GetStringAsync(
-                Host,
-                port,
-                DenonEndpoints.MainZoneStatus,
-                cancellationToken).ConfigureAwait(false);
+                Host, port, DenonEndpoints.MainZoneStatus, cancellationToken).ConfigureAwait(false);
             inputs = DenonXmlParser.ParseMainZoneStatus(xml).AvailableInputs;
         }
 
         _availableInputs = inputs;
         if (State is not null)
-        {
             State = State with { AvailableInputs = inputs };
-        }
-
         return inputs;
     }
 
@@ -381,7 +398,7 @@ public sealed class DenonAvrClient : IDisposable
         {
             var bundledXml = await _httpTransport.PostXmlAsync(
                 Host,
-                port,
+                AppCommandPort ?? port,
                 DenonEndpoints.AppCommand,
                 DenonAppCommand.CreateRequest(DenonAppCommand.MainZoneStatusCommands),
                 cancellationToken).ConfigureAwait(false);
@@ -436,13 +453,46 @@ public sealed class DenonAvrClient : IDisposable
             availableInputs);
     }
 
+    /// <summary>Tries the two documented HTTP ports, without assuming Deviceinfo and AppCommand share one.</summary>
+    private async Task<int?> DiscoverAppCommandPortAsync(int deviceInfoPort, CancellationToken cancellationToken)
+    {
+        foreach (var candidate in new[] { deviceInfoPort, deviceInfoPort == 80 ? 8080 : 80 })
+        {
+            if (await ProbeAppCommandAsync(candidate, cancellationToken).ConfigureAwait(false))
+                return candidate;
+        }
+        return null;
+    }
+
+    /// <summary>Probes the actual endpoint on a candidate port.</summary>
+    private async Task<bool> ProbeAppCommandAsync(int port, CancellationToken cancellationToken)
+    {
+        // An optional endpoint must not block initialization for the full HTTP timeout.
+        using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        {
+            timeout.CancelAfter(TimeSpan.FromSeconds(3));
+            try
+            {
+                var xml = await QueryAppCommandAsync(
+                    port, DenonAppCommand.GetAllZonePowerStatus, timeout.Token).ConfigureAwait(false);
+                return DenonXmlParser.HasAppCommandData(xml);
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
+                (exception is HttpRequestException || exception is OperationCanceledException ||
+                 exception is DenonProtocolException || exception is System.Xml.XmlException))
+            {
+                return false;
+            }
+        }
+    }
+
     private Task<string> QueryAppCommandAsync(
         int port,
         string command,
         CancellationToken cancellationToken) =>
         _httpTransport.PostXmlAsync(
             Host,
-            port,
+            AppCommandPort ?? port,
             DenonEndpoints.AppCommand,
             DenonAppCommand.CreateRequest(command),
             cancellationToken);
@@ -452,21 +502,29 @@ public sealed class DenonAvrClient : IDisposable
         string request,
         CancellationToken cancellationToken)
     {
-        try
+        var preferred = AppCommand0300Port ?? AppCommandPort ?? port;
+        var candidates = AppCommand0300Port.HasValue
+            ? new[] { preferred }
+            : new[] { preferred, preferred == 80 ? 8080 : 80 };
+        foreach (var candidate in candidates)
         {
-            return await _httpTransport.PostXmlAsync(
-                Host,
-                port,
-                DenonEndpoints.AppCommand0300,
-                request,
-                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var xml = await _httpTransport.PostXmlAsync(
+                    Host, candidate, DenonEndpoints.AppCommand0300,
+                    request, cancellationToken).ConfigureAwait(false);
+                if (!DenonXmlParser.HasAppCommandData(xml)) continue;
+                AppCommand0300Port = candidate;
+                return xml;
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
+                (exception is HttpRequestException || exception is DenonProtocolException ||
+                 exception is System.Xml.XmlException || exception is OperationCanceledException))
+            {
+                // This optional endpoint is not available on this candidate port.
+            }
         }
-        catch (HttpRequestException) when (!cancellationToken.IsCancellationRequested)
-        {
-            // Audio details are an optional capability. Receivers without the
-            // AppCommand0300 endpoint must still return their basic state.
-            return null;
-        }
+        return null;
     }
 
     /// <summary>Switches the Main Zone on using <see cref="PreferredControlProtocol"/>.</summary>
@@ -1233,13 +1291,13 @@ public sealed class DenonAvrClient : IDisposable
 
     private static DenonReceiverCapabilities CreateReceiverCapabilities(
         DenonDeviceInfo deviceInfo,
-        int httpPort)
+        bool supportsAppCommand)
     {
         var zoneCount = deviceInfo.ZoneCount;
         return new DenonReceiverCapabilities(
             SupportsHttp: true,
             SupportsTelnet: null,
-            SupportsAppCommand: httpPort == 8080,
+            SupportsAppCommand: supportsAppCommand,
             SupportsAppCommand0300: null,
             SupportsZone2: zoneCount is >= 2,
             SupportsZone3: zoneCount is >= 3,

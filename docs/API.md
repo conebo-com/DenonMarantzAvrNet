@@ -78,7 +78,7 @@ Denon web interfaces are not consistent across model generations. A receiver can
 | `legacy-goform` | Other receivers initialized through port `80` | 0 | Deliberately unsupported until implemented for that receiver family |
 | `unknown` | Any other receiver | 0 | Deliberately unsupported |
 
-The public Main Zone and Telnet APIs remain unchanged. Profiles isolate only model-specific HTTP details, so adding a receiver-specific feature provider does not require a separate public client class or duplicated control code.
+`AppCommandPort` and `AppCommand0300Port` report the independently discovered ports, or `null` until the endpoint is confirmed. The public Main Zone and Telnet APIs remain unchanged. Profiles isolate only model-specific HTTP details, so adding a receiver-specific feature provider does not require a separate public client class or duplicated control code.
 
 ```csharp
 await receiver.InitializeAsync();
@@ -94,7 +94,7 @@ Task<DenonReceiverState> UpdateAsync(
 
 The method reads Main Zone status and also writes the result to `State`.
 
-On port 8080, these four base queries are initially sent together to `AppCommand.xml`:
+When the AppCommand endpoint has been positively discovered on port 80 or 8080, these four base queries are initially sent together to `AppCommand.xml`:
 
 - `GetAllZonePowerStatus`
 - `GetAllZoneVolume`
@@ -110,7 +110,7 @@ When available, the following commands are then queried through `AppCommand0300.
 - `GetAudioInfo`
 - `GetActiveSpeaker`
 
-Port 80 uses the legacy Main Zone status XML. Extended audio information is generally unavailable there.
+The library probes AppCommand independently of the port carrying `Deviceinfo.xml`; a port-80 receiver may support AppCommand and/or AppCommand0300. When AppCommand is unavailable, the legacy Main Zone status XML remains the fallback. The detailed audio endpoint is probed independently and may be absent.
 
 After the first `UpdateAsync()`, `ReceiverCapabilities.SupportsAppCommand0300` is set to `true` or `false`. Before that query it is `null`, because the extension has not been checked yet.
 

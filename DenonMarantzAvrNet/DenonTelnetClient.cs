@@ -1,4 +1,4 @@
-using DenonMarantzAvrNet.Exceptions;
+﻿using DenonMarantzAvrNet.Exceptions;
 using DenonMarantzAvrNet.Logger;
 using DenonMarantzAvrNet.Models;
 using DenonMarantzAvrNet.Profiles;
@@ -28,98 +28,24 @@ public sealed class DenonTelnetClient
     /// <summary>Gets the receiver hostname or IP address.</summary>
     public string Host { get; }
 
-    /// <summary>Sends one Denon TCP command and returns its first response line.</summary>
+    /// <summary>
+    /// Sends a command on the receiver's shared Telnet connection and waits for
+    /// a matching protocol-family status response. Unrelated status messages
+    /// and banners are not returned as acknowledgements.
+    /// </summary>
     public async Task<string> SendCommandAsync(string command, CancellationToken cancellationToken = default)
     {
+        ValidateCommand(command);
+        var lines = await DenonTelnetSession.ForHost(Host)
+            .ExecuteAsync(command, null, _timeout, cancellationToken).ConfigureAwait(false);
+        return lines[0];
+    }
+
+    private static void ValidateCommand(string command)
+    {
         NetFrameworkCompat.ThrowIfNullOrWhiteSpace(command, nameof(command));
-
         if (command.Contains('\r') || command.Contains('\n'))
-        {
             throw new ArgumentException("Ein Telnet-Befehl darf keinen Zeilenumbruch enthalten.", nameof(command));
-            // <-----------
-        }
-
-        using var timeoutSource = new CancellationTokenSource(_timeout);
-        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken, timeoutSource.Token);
-        var token = linkedSource.Token;
-
-        try
-        {
-            using var tcpClient = new TcpClient();
-            using var cancellationRegistration = token.Register(() => tcpClient.Close());
-            await tcpClient.ConnectAsync(Host, 23).ConfigureAwait(false);
-
-            using var stream = tcpClient.GetStream();
-            var request = Encoding.ASCII.GetBytes($"{command}\r");
-            await stream.WriteAsync(request, 0, request.Length, token).ConfigureAwait(false);
-            await stream.FlushAsync(token).ConfigureAwait(false);
-
-            ReceiverLogger.Write("TELNET", $"TX {command}");
-
-            var response = new StringBuilder();
-            var buffer = new byte[1];
-
-            while (true)
-            {
-                var read = await stream.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
-
-                if (read == 0)
-                {
-                    break;
-                    // <-----------
-                }
-
-                var character = (char)buffer[0];
-
-                if (character is '\r' or '\n')
-                {
-                    if (response.Length > 0)
-                    {
-                        break;
-                        // <-----------
-                    }
-
-                    continue;
-                    // <-----------
-                }
-
-                response.Append(character);
-            }
-
-            if (response.Length == 0)
-            {
-                throw new IOException("Der Receiver hat auf den Telnet-Befehl keine Antwort gesendet.");
-                // <-----------
-            }
-
-            var responseText = response.ToString();
-
-            ReceiverLogger.Write("TELNET", $"RX {responseText}");
-
-            return responseText;
-            // <-----------
-        }
-        catch (Exception exception) when (token.IsCancellationRequested &&
-                                          exception is ObjectDisposedException
-                                              or IOException
-                                              or SocketException)
-        {
-            var cancellationException = new OperationCanceledException(
-                "Der Telnet-Befehl wurde abgebrochen oder hat das Zeitlimit überschritten.",
-                exception,
-                token);
-
-            ReceiverLogger.WriteException("TELNET", $"Command '{command}'", cancellationException);
-            throw cancellationException;
-            // <-----------
-        }
-        catch (Exception exception)
-        {
-            ReceiverLogger.WriteException("TELNET", $"Command '{command}'", exception);
-            throw;
-            // <-----------
-        }
     }
 
     /// <summary>Queries the current Zone 2 state.</summary>
@@ -372,95 +298,12 @@ public sealed class DenonTelnetClient
     private static string ToTelnetVolumeValue(double volume) =>
         DenonVolumeCodec.ToTelnetValue(volume);
 
-    private async Task<IReadOnlyList<string>> SendCommandUntilAsync(
-                                                            string command,
-                                                            string terminatingResponse,
-                                                            CancellationToken cancellationToken)
+    private Task<IReadOnlyList<string>> SendCommandUntilAsync(
+        string command, string terminatingResponse, CancellationToken cancellationToken)
     {
-        using var timeoutSource = new CancellationTokenSource(_timeout);
-        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken, timeoutSource.Token);
-        var token = linkedSource.Token;
-
-        try
-        {
-            using var tcpClient = new TcpClient();
-            using var cancellationRegistration = token.Register(() => tcpClient.Close());
-            await tcpClient.ConnectAsync(Host, 23).ConfigureAwait(false);
-
-            using var stream = tcpClient.GetStream();
-            var request = Encoding.ASCII.GetBytes($"{command}\r");
-            await stream.WriteAsync(request, 0, request.Length, token).ConfigureAwait(false);
-            await stream.FlushAsync(token).ConfigureAwait(false);
-
-            ReceiverLogger.Write("TELNET", $"TX {command}");
-
-            var responses = new List<string>();
-            var line = new StringBuilder();
-            var buffer = new byte[1];
-
-            while (true)
-            {
-                var read = await stream.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
-
-                if (read == 0)
-                {
-                    break;
-                    // <-----------
-                }
-
-                var character = (char)buffer[0];
-
-                if (character is not ('\r' or '\n'))
-                {
-                    line.Append(character);
-                    continue;
-                    // <-----------
-                }
-
-                if (line.Length == 0)
-                {
-                    continue;
-                    // <-----------
-                }
-
-                var response = line.ToString();
-                responses.Add(response);
-
-                ReceiverLogger.Write("TELNET", $"RX {response}");
-
-                if (string.Equals(response, terminatingResponse, StringComparison.OrdinalIgnoreCase))
-                {
-                    return responses;
-                    // <-----------
-                }
-
-                line.Clear();
-            }
-
-            throw new IOException($"Der Receiver hat die erwartete Abschlussmeldung '{terminatingResponse}' nicht gesendet.");
-            // <-----------
-        }
-        catch (Exception exception) when (token.IsCancellationRequested &&
-                                          exception is ObjectDisposedException
-                                              or IOException
-                                              or SocketException)
-        {
-            var cancellationException = new OperationCanceledException(
-                "Der Telnet-Befehl wurde abgebrochen oder hat das Zeitlimit überschritten.",
-                exception,
-                token);
-
-            ReceiverLogger.WriteException("TELNET", $"Command '{command}'", cancellationException);
-            throw cancellationException;
-            // <-----------
-        }
-        catch (Exception exception)
-        {
-            ReceiverLogger.WriteException("TELNET", $"Command '{command}'", exception);
-            throw;
-            // <-----------
-        }
+        ValidateCommand(command);
+        return DenonTelnetSession.ForHost(Host)
+            .ExecuteAsync(command, terminatingResponse, _timeout, cancellationToken);
     }
 
     private static DenonSpeakerLevel ParseSpeakerLevel(string response)

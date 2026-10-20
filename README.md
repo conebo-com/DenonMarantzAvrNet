@@ -6,7 +6,7 @@ The library was developed primarily with a **Denon AVC-X6800H** and its `0301` c
 
 ## Features
 
-- Automatic detection of the HTTP interface on port `80` or `8080`
+- Automatic `Deviceinfo.xml` discovery on HTTP port `80` or `8080`; **independent** read-only `AppCommand.xml`/`AppCommand0300.xml` capability probes on both candidate ports
 - Reads the model, API version, number of zones, MAC address, and device category
 - Receiver profiles selected from the reported model (`avc-x6800h`, `avc-x6700h`, `legacy-goform`, `unknown`), with a manual override for similar models (compatibility mode)
 - Main Zone status:
@@ -31,6 +31,7 @@ The library was developed primarily with a **Denon AVC-X6800H** and its `0301` c
   - Enable and disable mute
   - Select an input by its visible Denon name
 - Zone 2 and Zone 3 volume (up/down/set) and mute through the same unified API
+- Shared persistent Telnet command/event session, serial command correlation, prefix-checked replies, and automatic reconnect on failure
 - Telnet client (`DenonTelnetClient`) for everything that is Telnet-only or Telnet-specific:
   - Queries: power, volume, mute, input, surround mode, digital input mode, Zone 2, Zone 3
   - Zone 2/3 power and input selection
@@ -63,13 +64,15 @@ The library was developed primarily with a **Denon AVC-X6800H** and its `0301` c
 `DenonMarantzAvrNet.TesterGui` is a WPF application (English and German) for testing the library against your receiver:
 
 - Connects to a host or IP address and shows the detected model and receiver profile
-- If the receiver is not known to the library, or reports no type name, a dialog lets you pick the most similar profile (6800 or 6700). The tester then runs in **compatibility mode**, which is shown in the main window.
+- Receiver profile dialog defaults to **Auto** (including `legacy-goform` for older models). A manual choice of another model is an optional, explicitly displayed **compatibility mode**; it is never required merely to connect.
 - Command list grouped by Status, Main Zone, Zones 2/3, Speakers (HTTP) and Audio / Levels (Telnet). Commands can be sent over Auto, HTTP, or Telnet where the library supports it.
 - Separate output panes for the result, the HTTP traffic and the Telnet traffic, read from the library log
 - A **Discover native speaker indices (read-only)** command for comparing native level/distance IDs and optional menu/layout metadata across receiver models
 - **Check receiver compatibility...** runs a set of **read-only** operations against your receiver, shows each result as green (ok), yellow (warning) or red (error), and prepares a JSON report. You can choose a regular or an anonymized report. The anonymized report leaves out the MAC address and host. The report is only shown and copied to the clipboard. **Nothing is sent automatically**: you paste it into an e-mail yourself.
 
 Some commands in the tester change receiver settings (power, volume, input, levels, distances, presets). The compatibility check does not.
+
+For details of this change, the read-only checks and their limitations, see [HTTP discovery and Telnet session](docs/TRANSPORT-DISCOVERY.md).
 
 ## Requirements
 

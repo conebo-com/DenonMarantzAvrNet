@@ -76,3 +76,7 @@ An HTTP 200 status with an empty `<rx>` is not valid protocol content. On the AV
 See [SPEAKER-DISCOVERY.md](SPEAKER-DISCOVERY.md). The tester command 'Discover native speaker indices (read-only)' reads up to five AJAX pages. Note the separation of levels, distances, configuration and layout groups; none of these indices are equated by this method. Optional pages may be temporarily inaccessible. No receiver settings are changed.
 
 Offline parser checks on Windows: `dotnet run --project .\DenonMarantzAvrNet.Tests` (net48).
+
+## HTTP/Telnet reliability test (2026-10-20)
+
+See [TRANSPORT-DISCOVERY.md](TRANSPORT-DISCOVERY.md). With the X4100W, leave the profile on Auto/`legacy-goform`. Do not force the X6700H profile. The report now includes the independently detected AppCommand and 0300 ports. Validate prefix-correlated Telnet `PW?`, `MV?`, `MU?`, `SI?`, `MS?` and `CV?` responses. A `MVMAX` status must not appear as the result of `MV?` or `MU?`. Run the offline standalone tests using `dotnet run --project .\DenonMarantzAvrNet.Tests\DenonMarantzAvrNet.Tests.csproj` (the test project is an executable, not an xUnit/MSTest project).

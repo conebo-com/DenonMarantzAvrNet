@@ -5,8 +5,6 @@ namespace DenonMarantzAvrNet.TesterGui
 {
     public sealed class ReceiverProfileDialog : Window
     {
-        private static string PlaceholderText => Loc.Get("<select a profile>");
-
         private readonly bool _requiresReceiverType;
         private readonly StackPanel _stcMain;
         private readonly StackPanel _stcButtons;
@@ -40,9 +38,18 @@ namespace DenonMarantzAvrNet.TesterGui
             {
                 Margin = new Thickness(0, 0, 0, 12)
             };
-            _cmbProfile.Items.Add(new ComboBoxItem { Content = PlaceholderText, Tag = null });
-            _cmbProfile.Items.Add(new ComboBoxItem { Content = "6800", Tag = "avc-x6800h" });
-            _cmbProfile.Items.Add(new ComboBoxItem { Content = "6700", Tag = "avc-x6700h" });
+            // Automatic detection must always be selectable, including unknown and legacy models.
+            // Overrides are intended only for explicit compatibility testing.
+            var automaticId = detectedProfileId ?? "unknown";
+            _cmbProfile.Items.Add(new ComboBoxItem
+            {
+                Content = "Auto (" + automaticId + ")",
+                Tag = automaticId
+            });
+            _cmbProfile.Items.Add(new ComboBoxItem { Content = "AVC-X6800H", Tag = "avc-x6800h" });
+            _cmbProfile.Items.Add(new ComboBoxItem { Content = "AVC-X6700H", Tag = "avc-x6700h" });
+            _cmbProfile.Items.Add(new ComboBoxItem { Content = "Legacy / AVR-X4100W", Tag = "legacy-goform" });
+            _cmbProfile.Items.Add(new ComboBoxItem { Content = "Unknown / generisch", Tag = "unknown" });
 
             _lblReceiverType = new TextBlock
             {
@@ -99,18 +106,12 @@ namespace DenonMarantzAvrNet.TesterGui
             _cmbProfile.SelectionChanged += CmbProfile_SelectionChanged;
             _txtReceiverType.TextChanged += TxtReceiverType_TextChanged;
 
-            var detectedIndex = FindItemIndex(detectedProfileId);
+            var detectedIndex = 0; // Automatic identification is the safe default.
             var profileInfoText = _txtInfo.Text;
             if (_requiresReceiverType)
             {
                 _txtInfo.Text =
                     Loc.Get("The receiver did not report a type name. Please select the most similar type from the list and enter the type of your receiver below.") +
-                    Environment.NewLine + Environment.NewLine + profileInfoText;
-            }
-            else if (detectedIndex == 0)
-            {
-                _txtInfo.Text =
-                    Loc.Format("The receiver reports the type '{0}', but it is not available in this tester. Please select the most similar type from the list.", reportedModelName) +
                     Environment.NewLine + Environment.NewLine + profileInfoText;
             }
 
@@ -125,22 +126,6 @@ namespace DenonMarantzAvrNet.TesterGui
         /// reported no type name; otherwise <see langword="null"/>.
         /// </summary>
         public string? EnteredReceiverType { get; private set; }
-
-        private int FindItemIndex(string? profileId)
-        {
-            for (var index = 1; index < _cmbProfile.Items.Count; index++)
-            {
-                if (_cmbProfile.Items[index] is ComboBoxItem item &&
-                    string.Equals(item.Tag as string, profileId, StringComparison.OrdinalIgnoreCase))
-                {
-                    return index;
-                    // <-----------
-                }
-            }
-
-            return 0;
-            // <-----------
-        }
 
         private void UpdateAcceptState()
         {

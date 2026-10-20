@@ -273,6 +273,8 @@ namespace DenonMarantzAvrNet.TesterGui
             builder.AppendLine($"API version:       {deviceInfo.CommunicationApiVersion ?? "-"}");
             builder.AppendLine($"Zones:             {deviceInfo.ZoneCount?.ToString(CultureInfo.InvariantCulture) ?? "-"}");
             builder.AppendLine($"HTTP port:         {_client.HttpPort?.ToString(CultureInfo.InvariantCulture) ?? "-"}");
+            builder.AppendLine($"AppCommand port:   {_client.AppCommandPort?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"}");
+            builder.AppendLine($"AppCmd0300 port:   {_client.AppCommand0300Port?.ToString(CultureInfo.InvariantCulture) ?? "not confirmed"}");
             builder.AppendLine($"Detected profile:  {_detectedProfileId ?? "-"}");
             builder.AppendLine($"Used profile:      {_client.ReceiverProfileId ?? "-"}");
             builder.AppendLine($"Compatibility mode: {(_isCompatibilityMode ? "YES" : "no")}");
@@ -464,6 +466,8 @@ namespace DenonMarantzAvrNet.TesterGui
                     CommunicationApiVersion = deviceInfo?.CommunicationApiVersion,
                     ZoneCount = deviceInfo?.ZoneCount,
                     HttpPort = _client.HttpPort,
+                    AppCommandPort = _client.AppCommandPort,
+                    AppCommand0300Port = _client.AppCommand0300Port,
                     MacAddress = anonymized ? null : deviceInfo?.MacAddress
                 },
                 Capabilities = _client.ReceiverCapabilities,
