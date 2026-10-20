@@ -23,3 +23,11 @@
 - Extend WPF compatibility report with both diagnostics; XML field **names** only to avoid exposing private values.
 - Add two offline regression checks and research notes in `docs/LEGACY_HTTP_RESEARCH.md`.
 - No changes to speaker calibration readers/writers, volume, or sound mode controls.
+
+### Native speaker matrix (2026-10-20)
+
+- Parse the receiver-provided GetActiveSpeaker/AppCommand0300 native slots on HTTP 80 or 8080, without a model speaker profile.
+- Keep parameter IDs, optional labels and raw control codes; do not infer Audyssey calibration indices or active output semantics.
+- Expose `DiscoverSpeakerMatrixAsync()` and include a privacy-conscious read-only operation in WPF support reports.
+- Add parser/HTTP port 80 tests and update legacy speaker research notes.
+- Reconfirm CV? returned exactly two adjustments at standby; no setup/calibration writes were added.

@@ -193,6 +193,7 @@ namespace DenonMarantzAvrNet.TesterGui
             new("Speakers (HTTP)", "Distances", ReadDistancesAsync),
             new("Speakers (HTTP)", "Configured speakers", ReadConfiguredSpeakersAsync),
             new("Receiver", "Legacy HTTP discovery (read only)", ReadLegacyHttpDiscoveryAsync),
+            new("Speakers (HTTP)", "Native speaker matrix (read only)", ReadSpeakerMatrixAsync),
             new("Telnet", "CV? raw diagnostic", ReadRawChannelLevelsAsync),
             new("Telnet", "Channel levels", ReadChannelLevelsAsync),
             new("Telnet", "Power (PW?)", token => TelnetQueryAsync(_telnetClient.QueryPowerAsync, token)),
@@ -401,6 +402,44 @@ namespace DenonMarantzAvrNet.TesterGui
             return report.Probes.Any(p => p.Result == "Received")
                 ? Ok(builder.ToString().TrimEnd())
                 : Warning(builder.ToString().TrimEnd());
+        }
+
+        private async Task<OperationResult> ReadSpeakerMatrixAsync(CancellationToken cancellationToken)
+        {
+            var matrix = await _client.DiscoverSpeakerMatrixAsync(cancellationToken);
+            var builder = new StringBuilder();
+            builder.AppendLine($"Response: {matrix.Status}; port: {matrix.HttpPort?.ToString() ?? "unknown"}");
+            builder.AppendLine($"Native speaker slots: {matrix.Slots.Count}");
+            builder.AppendLine($"{"Native ID",-20} {"Control",-10} Label");
+            foreach (var slot in matrix.Slots)
+            {
+                // Support reports may be forwarded to third parties. Only display
+                // standard short channel tokens, not arbitrary/user-entered names.
+                var label = IsSafeSpeakerCode(slot.Label) ? slot.Label :
+                    string.IsNullOrEmpty(slot.Label) ? "(none)" : "(custom label withheld)";
+                var control = slot.ControlCode ?? "(none)";
+                if (slot.ControlCode != null && (slot.ControlCode.Length > 3 ||
+                    !slot.ControlCode.All(ch => ch >= '0' && ch <= '9')))
+                    control = "(non-numeric)";
+                builder.AppendLine($"{slot.NativeId,-20} {control,-10} {label}");
+            }
+            builder.AppendLine("Control values are raw AVR codes; no universal meaning is assumed.");
+            builder.AppendLine("These are neither Audyssey calibration levels nor speaker distances.");
+            return matrix.Status == "Received"
+                ? Ok(builder.ToString().TrimEnd())
+                : Warning(builder.ToString().TrimEnd());
+        }
+
+        private static bool IsSafeSpeakerCode(string? value)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length > 12) return false;
+            // Exact token set: never leak arbitrary custom room/speaker names.
+            var labels = new[] { "FL", "FR", "C", "SW", "SW1", "SW2", "SW3", "SW4",
+                "SL", "SR", "SBL", "SBR", "SB", "FHL", "FHR", "RHL", "RHR",
+                "TFL", "TFR", "TML", "TMR", "TRL", "TRR", "FWL", "FWR",
+                "FDL", "FDR", "SDL", "SDR", "TS", "SHL", "SHR" };
+            return labels.Any(code => string.Equals(code, value,
+                StringComparison.OrdinalIgnoreCase));
         }
 
         private async Task<OperationResult> ReadRawChannelLevelsAsync(CancellationToken cancellationToken)

@@ -467,3 +467,13 @@ known legacy web/XML and AppCommand status interfaces; no specific X4100W profil
 required. The WPF compatibility report also provides `CV? raw diagnostic` to show the
 receiver's native channel adjustment list through `CVEND`. Details and caveats:
 [docs/LEGACY_HTTP_RESEARCH.md](docs/LEGACY_HTTP_RESEARCH.md).
+
+
+#### Legacy receiver native speaker matrix (read-only)
+
+For AVR-X4100W-era devices answering AppCommand0300, call
+`await client.DiscoverSpeakerMatrixAsync()` after `InitializeAsync()`.
+The returned `Slots` preserve the AVR's own `NativeId`, optional `Label`, and
+uninterpreted `ControlCode`. This is not a speaker calibration-level/distance
+API. The WPF compatibility test includes **Native speaker matrix (read only)**.
+See `docs/LEGACY_HTTP_RESEARCH.md` for limitations and safety conditions.

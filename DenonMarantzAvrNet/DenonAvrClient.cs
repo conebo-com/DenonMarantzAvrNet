@@ -896,6 +896,24 @@ public sealed class DenonAvrClient : IDisposable
         DenonLegacyHttpDiscoveryReader.ReadAsync(
             Host, GetInitializedPort(), _httpTransport, cancellationToken);
 
+    /// <summary>
+    /// Reads native GetActiveSpeaker matrix entries through AppCommand0300 without
+    /// requiring a model speaker profile. The reported slots/control codes are
+    /// not calibration-level or distance indices. An empty result does not mean
+    /// the receiver has no configured speakers.
+    /// </summary>
+    public async Task<DenonSpeakerMatrixDiscovery> DiscoverSpeakerMatrixAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        var port = GetInitializedPort();
+        var xml = await TryQueryAppCommand0300Async(port,
+            DenonAppCommand.CreateDetailedRequest(DenonAppCommand.GetActiveSpeaker, "activespall"),
+            cancellationToken).ConfigureAwait(false);
+        return DenonSpeakerMatrixDiscoveryReader.Parse(xml,
+            xml == null ? (int?)null : AppCommand0300Port);
+    }
+
     /// <summary>Reads the active speaker-preset levels using the selected receiver profile.</summary>
     public Task<IReadOnlyList<DenonSpeakerPresetLevel>> GetSpeakerPresetLevelsAsync(
         CancellationToken cancellationToken = default) =>

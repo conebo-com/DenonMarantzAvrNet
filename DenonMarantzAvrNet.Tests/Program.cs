@@ -37,7 +37,9 @@ internal static class Program
             TestAppCommandPort80Discovery();
             TestLegacyInspectionWithoutLeakingValues();
             TestLegacyEndpointProbeIsReadOnly();
-            Console.WriteLine("Discovery/transport: 13 tests passed.");
+            TestNativeSpeakerMatrixParsing();
+            TestNativeSpeakerMatrixHttpPort80();
+            Console.WriteLine("Discovery/transport: 15 tests passed.");
             return 0;
         }
         catch (Exception exception)
@@ -330,6 +332,87 @@ internal static class Program
                 "Discovery must never issue setup writes or command URLs.");
             Check(report.Probes.Any(x => x.Name == "Legacy MainZone XML" && x.Result == "Received"),
                 "Legacy MainZone status must remain available independently of profiles.");
+        }
+    }
+
+    private static void TestNativeSpeakerMatrixParsing()
+    {
+        const string xml = "<rx><cmd id='3'><name>GetActiveSpeaker</name><list>" +
+            "<param name='activespa1' control='0'></param>" +
+            "<param name='activespb1' control='2'>SW</param>" +
+            "<param name='activespc2' control='1'>C</param>" +
+            "<param name='activespd2' control='5'>XYZ</param>" +
+            "</list></cmd></rx>";
+        var result = DenonSpeakerMatrixDiscoveryReader.Parse(xml, 80);
+        Check(result.Status == "Received" && result.HttpPort == 80 &&
+              result.Slots.Count == 4, "Native matrix should preserve all reported slots.");
+        Check(result.Slots[0].NativeId == "activespa1" && result.Slots[0].Label == null &&
+              result.Slots[0].ControlCode == "0", "Blank slots must be retained.");
+        Check(result.Slots[1].Label == "SW" && result.Slots[2].Label == "C" &&
+              result.Slots[3].ControlCode == "5" && result.Slots[3].Label == "XYZ",
+            "Raw labels and future control codes must not be rewritten.");
+        Check(DenonSpeakerMatrixDiscoveryReader.Parse("<rx><error>unknown</error></rx>", 80)
+              .Status == "Rejected", "Explicit error must be separated from empty answers.");
+        Check(DenonSpeakerMatrixDiscoveryReader.Parse("<rx><cmd><name>GetActiveSpeaker</name>" +
+              "<list/></cmd></rx>", 80).Status == "Empty",
+            "A blank matrix is not proof that the receiver has no speakers.");
+        Check(DenonSpeakerMatrixDiscoveryReader.Parse(null, null).Status == "NoResponse",
+            "Timeout/no response must not be called unsupported.");
+        Check(DenonSpeakerMatrixDiscoveryReader.Parse("<rx><cmd><name>GetOtherCommand</name>" +
+              "<list><param name='activespa1' control='2'>FL</param></list></cmd></rx>", 80)
+              .Slots.Count == 0, "Never accept slots from another command.");
+        try
+        {
+            DenonSpeakerMatrixDiscoveryReader.Parse(
+                "<!DOCTYPE rx [<!ENTITY x SYSTEM 'file:///private'>]><rx>&x;</rx>", 80);
+            throw new Exception("Unsafe XML must be rejected.");
+        }
+        catch (System.Xml.XmlException) { }
+    }
+
+    private static void TestNativeSpeakerMatrixHttpPort80()
+    {
+        var handler = new FakeMatrixHandler();
+        using (var transport = new DenonHttpTransport(handler, TimeSpan.FromSeconds(2)))
+        using (var receiver = new DenonAvrClient("receiver.example", transport))
+        {
+            receiver.InitializeAsync().GetAwaiter().GetResult();
+            Check(receiver.ReceiverProfileId == "legacy-goform",
+                "The native speaker matrix should work with the generic legacy profile.");
+            var result = receiver.DiscoverSpeakerMatrixAsync().GetAwaiter().GetResult();
+            Check(result.HttpPort == 80 && result.Status == "Received" &&
+                result.Slots.Count == 2 && result.Slots[0].Label == "FL",
+                "AppCommand0300 on HTTP 80 should expose the native matrix without a speaker profile.");
+            Check(handler.Requests.Any(req => req.RequestUri!.AbsolutePath.EndsWith("AppCommand0300.xml")),
+                "The actual protocol API must be queried.");
+            Check(handler.Requests.All(req => req.Method == HttpMethod.Get ||
+                (req.Method == HttpMethod.Post &&
+                req.RequestUri!.AbsolutePath.Contains("AppCommand"))),
+                "Only documented read-only AppCommand POSTs may be sent.");
+        }
+    }
+
+    private sealed class FakeMatrixHandler : HttpMessageHandler
+    {
+        internal List<HttpRequestMessage> Requests { get; } = new List<HttpRequestMessage>();
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            var path = request.RequestUri!.AbsolutePath;
+            var xml = path == "/goform/Deviceinfo.xml"
+                ? "<Device_Info><ModelName>*AVR-X4100W</ModelName>" +
+                  "<CommApiVers>0300</CommApiVers><DeviceZones>3</DeviceZones></Device_Info>"
+                : path == "/goform/AppCommand0300.xml"
+                    ? "<rx><cmd><name>GetActiveSpeaker</name><list>" +
+                      "<param name='activespa1' control='2'>FL</param>" +
+                      "<param name='activespb1' control='1'>FR</param>" +
+                      "</list></cmd></rx>"
+                    : "<rx><cmd><status>ON</status></cmd></rx>";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(xml)
+            });
         }
     }
 
