@@ -195,6 +195,8 @@ namespace DenonMarantzAvrNet.TesterGui
             new("Receiver", "Legacy HTTP discovery (read only)", ReadLegacyHttpDiscoveryAsync),
             new("Receiver", "Device capabilities (dynamic, read only)", ReadDeviceCapabilitiesAsync),
             new("Receiver", "Advertised read commands (experimental)", ReadAdvertisedReadCommandsAsync),
+            new("Speakers (HTTP)", "Legacy calibration levels (read only)", ReadLegacyCalibrationLevelsAsync),
+            new("Speakers (HTTP)", "Legacy calibration distances (read only)", ReadLegacyCalibrationDistancesAsync),
             new("Speakers (HTTP)", "Channel Level Adjust (per-input, NOT calibration)", ReadChannelAdjustmentsAsync),
             new("Receiver", "Sound mode families (advertised, read only)", ReadSoundFamiliesAsync),
             new("Telnet", "OPSMLALL grouped sound modes (optional read only)", ReadSoundModeOptionsAsync),
@@ -385,6 +387,62 @@ namespace DenonMarantzAvrNet.TesterGui
 
             return Ok(builder.ToString().TrimEnd());
             // <-----------
+        }
+
+        private bool CanProbeLegacyCalibration() =>
+            _client.HttpPort == 80 && _client.ReceiverProfileId == "legacy-goform";
+
+        private async Task<OperationResult> ReadLegacyCalibrationLevelsAsync(CancellationToken cancellationToken)
+        {
+            if (!CanProbeLegacyCalibration())
+                return Warning("Legacy HTML setup not probed: modern AJAX provider or unsupported port.");
+
+            try
+            {
+                var levels = await _client.GetLegacySpeakerCalibrationLevelsAsync(cancellationToken);
+                var builder = new StringBuilder();
+                builder.AppendLine("PERSISTENT SPEAKER SETUP (NOT OPTION / Channel Level Adjust / CV?)");
+                builder.AppendLine($"Calibration level channels: {levels.Count}");
+                foreach (var level in levels)
+                    builder.AppendLine($"  {level.NativeChannelCode,-6} {level.DisplayName,-22} " +
+                        FormatDecibels(level.Decibels));
+                return Ok(builder.ToString().TrimEnd());
+            }
+            catch (HttpRequestException exception)
+            {
+                return Warning("Legacy calibration Levels HTML unavailable: " + exception.GetType().Name);
+            }
+            catch (InvalidDataException exception)
+            {
+                return Warning("Legacy calibration Levels page unrecognized: " + exception.Message);
+            }
+        }
+
+        private async Task<OperationResult> ReadLegacyCalibrationDistancesAsync(CancellationToken cancellationToken)
+        {
+            if (!CanProbeLegacyCalibration())
+                return Warning("Legacy HTML setup not probed: modern AJAX provider or unsupported port.");
+
+            try
+            {
+                var distances = await _client.GetLegacySpeakerCalibrationDistancesAsync(cancellationToken);
+                var builder = new StringBuilder();
+                builder.AppendLine("PERSISTENT SPEAKER DISTANCES (NOT active speaker matrix indices)");
+                builder.AppendLine($"Distance channels: {distances.Count}");
+                builder.AppendLine($"Receiver display unit: {distances[0].ReceiverUnit}");
+                foreach (var distance in distances)
+                    builder.AppendLine($"  {distance.NativeChannelCode,-6} {distance.DisplayName,-22} " +
+                        FormatMeters(distance.Meters));
+                return Ok(builder.ToString().TrimEnd());
+            }
+            catch (HttpRequestException exception)
+            {
+                return Warning("Legacy calibration Distances HTML unavailable: " + exception.GetType().Name);
+            }
+            catch (InvalidDataException exception)
+            {
+                return Warning("Legacy calibration Distances page unrecognized: " + exception.Message);
+            }
         }
 
         private async Task<OperationResult> ReadChannelAdjustmentsAsync(CancellationToken cancellationToken)

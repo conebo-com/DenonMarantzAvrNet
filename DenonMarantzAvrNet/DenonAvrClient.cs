@@ -1042,6 +1042,40 @@ public sealed class DenonAvrClient : IDisposable
         CancellationToken cancellationToken = default) =>
         _telnetClient.GetSoundModeOptionsAsync(cancellationToken);
 
+    /// <summary>
+    /// Reads persistent calibration levels and distances directly from a legacy
+    /// Denon Speakers/Levels and Speakers/Distances web setup, using only HTTP GET.
+    /// Works by checking the actual pages, not by assuming a model profile.
+    /// Does not use per-input GetChLevel, Telnet CV?, or modern AJAX preset indices.
+    /// Both pages must be available; otherwise this method fails explicitly.
+    /// </summary>
+    public Task<DenonLegacySpeakerCalibrationSnapshot> GetLegacySpeakerCalibrationAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return DenonLegacySpeakerCalibrationReader.ReadAsync(
+            Host, GetInitializedPort(), _httpTransport, cancellationToken);
+    }
+
+    /// <summary>Reads persistent legacy speaker setup calibration levels (signed dB) through HTTP GET.</summary>
+    public Task<IReadOnlyList<DenonLegacySpeakerCalibrationLevel>> GetLegacySpeakerCalibrationLevelsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return DenonLegacySpeakerCalibrationReader.ReadLevelsAsync(
+            Host, GetInitializedPort(), _httpTransport, cancellationToken);
+    }
+
+    /// <summary>Reads persistent legacy speaker setup distances, normalized to meters, through HTTP GET.</summary>
+    public async Task<IReadOnlyList<DenonLegacySpeakerCalibrationDistance>> GetLegacySpeakerCalibrationDistancesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        var page = await DenonLegacySpeakerCalibrationReader.ReadDistancesAsync(
+            Host, GetInitializedPort(), _httpTransport, cancellationToken).ConfigureAwait(false);
+        return page.Speakers;
+    }
+
     /// <summary>Reads the active speaker-preset levels using the selected receiver profile.</summary>
     public Task<IReadOnlyList<DenonSpeakerPresetLevel>> GetSpeakerPresetLevelsAsync(
         CancellationToken cancellationToken = default) =>

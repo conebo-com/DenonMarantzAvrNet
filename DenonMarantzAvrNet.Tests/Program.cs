@@ -47,13 +47,108 @@ internal static class Program
             TestSoundFamiliesFromMainZoneShortcuts();
             TestOpsmlallParser();
             TestDistanceUnitConversion();
-            Console.WriteLine("Discovery/transport: 22 tests passed.");
+            TestLegacyCalibrationValues();
+            TestLegacyCalibrationRejectsBadPages();
+            TestLegacyCalibrationGetOnly();
+            Console.WriteLine("Discovery/transport: 25 tests passed.");
             return 0;
         }
         catch (Exception exception)
         {
             Console.Error.WriteLine(exception);
             return 1;
+        }
+    }
+
+    private const string LegacyLevelsFixture = @"<!DOCTYPE html><html><body>
+      <FORM name='spsetup' action='s_speakersetup.asp' method='POST'>
+      <div>Speakers/Levels</div>
+      <input type='hidden' name='setPureDirectOn' value='OFF'>
+      <tr><td><B>Front L</B></td><td><input id='RangeCVFL' type='range' value='-6.0' />
+          <input type='hidden' name='textCVFL' value='-6.0'></td></tr>
+      <tr><td><b>Top Middle L</b></td><td><input type='hidden' name='textCVTML' value='-2.0'></td></tr>
+      <tr><td><b>Surr. Back</b></td><td><input type='hidden' name='textCVSB' value='-8.5'></td></tr>
+      <tr><td><b>Future channel</b></td><td><input type='hidden' name='textCVXYZ' value='1.5'></td></tr>
+      </FORM></body></html>";
+
+    private const string LegacyDistancesFixture = @"<!DOCTYPE html><html><body>
+      <FORM name='spsetup' action='s_speakersetup.asp' method='POST'>
+      <div>Speakers/Distances</div>
+      <input type='hidden' name='setSetupLock' value='OFF'>
+      <input type='radio' name='radioDelayTimeMode' value='M'>Meters
+      <input type='radio' name='radioDelayTimeMode' value='F' checked>Feet
+      <tr><td><b>Front L</b></td><td><input type='text' name='textDelayTimeFl' value='9.71'></td></tr>
+      <tr><td><b>Top Middle L</b></td><td><input type='text' name='textDelayTimeTML' value='5.00'></td></tr>
+      <tr><td><b>Future channel</b></td><td><input type='text' name='textDelayTimeXYZ' value='2.00'></td></tr>
+      </FORM></body></html>";
+
+    private static void TestLegacyCalibrationValues()
+    {
+        var levels = DenonLegacySpeakerCalibrationReader.ParseLevels(LegacyLevelsFixture);
+        Check(levels.Count == 4 && levels[0].NativeChannelCode == "FL" &&
+            levels[0].Decibels == -6.0 && levels[1].Channel == SpeakerChannel.TopMiddleLeft &&
+            levels[2].Decibels == -8.5 && levels[3].Channel == null &&
+            levels[3].NativeChannelCode == "XYZ",
+            "HTML speaker calibration levels must preserve native codes, unknown channels and signed dB.");
+        var distance = DenonLegacySpeakerCalibrationReader.ParseDistances(LegacyDistancesFixture);
+        Check(distance.Unit == DenonSpeakerDistanceUnit.Feet && distance.Speakers.Count == 3 &&
+            Math.Abs(distance.Speakers[0].Meters - 2.959608) < 0.000001 &&
+            distance.Speakers[1].FormFieldName == "textDelayTimeTML" &&
+            distance.Speakers[2].Channel == null,
+            "Legacy HTML distance values must be dynamically enumerated and feet converted to meters.");
+        var meters = DenonLegacySpeakerCalibrationReader.ParseDistances(
+            LegacyDistancesFixture.Replace("value='M'>Meters", "value='M' checked>Meters")
+                .Replace("value='F' checked>Feet", "value='F'>Feet"));
+        Check(meters.Unit == DenonSpeakerDistanceUnit.Meters &&
+            Math.Abs(meters.Speakers[0].Meters - 9.71) < 0.000001,
+            "Receiver unit selection must be interpreted before converting distances.");
+    }
+
+    private static void TestLegacyCalibrationRejectsBadPages()
+    {
+        ExpectInvalid(() => DenonLegacySpeakerCalibrationReader.ParseLevels(
+            "<html><frameset><frame src='d_speakersetup.asp'></frameset></html>"));
+        ExpectInvalid(() => DenonLegacySpeakerCalibrationReader.ParseLevels(
+            LegacyLevelsFixture.Replace("value='-6.0'", "value='-20.0'")));
+        ExpectInvalid(() => DenonLegacySpeakerCalibrationReader.ParseLevels(
+            LegacyLevelsFixture.Replace("</FORM>", "<tr><td>Duplicate</td><td>" +
+                "<input type='hidden' name='textCVFL' value='0'></td></tr></FORM>")));
+        ExpectInvalid(() => DenonLegacySpeakerCalibrationReader.ParseDistances(
+            LegacyDistancesFixture.Replace("value='F' checked", "value='F'")));
+        ExpectInvalid(() => DenonLegacySpeakerCalibrationReader.ParseDistances(
+            LegacyDistancesFixture.Replace("value='OFF'", "value='ON'")));
+    }
+
+    private static void TestLegacyCalibrationGetOnly()
+    {
+        var handler = new FakeLegacyCalibrationHandler();
+        using (var transport = new DenonHttpTransport(handler, TimeSpan.FromSeconds(2)))
+        {
+            var read = DenonLegacySpeakerCalibrationReader.ReadAsync(
+                "receiver.example", 80, transport, CancellationToken.None).GetAwaiter().GetResult();
+            Check(handler.Paths.SequenceEqual(new[] {
+                    DenonLegacySpeakerCalibrationReader.LevelsPath,
+                    DenonLegacySpeakerCalibrationReader.DistancesPath
+                }) && handler.Methods.All(x => x == HttpMethod.Get),
+                "Legacy calibration discovery must never submit the HTML setup form or issue POST requests.");
+            Check(read.HttpPort == 80 && read.Levels.Count == 4 && read.Distances.Count == 3,
+                "Legacy calibration reader must obtain both setup pages without a model profile.");
+        }
+    }
+
+    private sealed class FakeLegacyCalibrationHandler : HttpMessageHandler
+    {
+        internal List<string> Paths { get; } = new List<string>();
+        internal List<HttpMethod> Methods { get; } = new List<HttpMethod>();
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Paths.Add(request.RequestUri!.AbsolutePath);
+            Methods.Add(request.Method);
+            var response = Paths[Paths.Count - 1] == DenonLegacySpeakerCalibrationReader.LevelsPath
+                ? LegacyLevelsFixture : LegacyDistancesFixture;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                { Content = new StringContent(response) });
         }
     }
 

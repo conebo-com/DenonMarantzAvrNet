@@ -1,4 +1,13 @@
-## Unreleased - priority sound / speaker diagnostics
+﻿## Unreleased - priority sound / speaker diagnostics
+
+## Legacy speaker calibration HTML reader (2026-10-20)
+
+- Parse persistent calibration levels and speaker distances from the legacy SETUP/SPEAKERS HTML content frames via HTTP GET (tested against captured AVR-X4100W responses).
+- Preserve native channel identifiers, display labels and original input fields without model-specific index tables.
+- Parse selected distance unit (M/F), normalize to meters, and reject ambiguous/invalid responses.
+- Add `GetLegacySpeakerCalibrationAsync()` and a separate read-only WPF support report operation.
+- Add three offline tests for HTML parsing, malformed pages and GET-only transport. No write commands added.
+
 
 - feat: native Movie/Music/Game/Direct/PureDirect family selection via Telnet and optional read-only OPSMLALL mode lists.
 - feat: read-only `GetChLevel` per-input adjustment parser; separate from calibration speaker setup.

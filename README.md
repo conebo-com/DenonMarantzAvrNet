@@ -482,3 +482,7 @@ See `docs/LEGACY_HTTP_RESEARCH.md` for limitations and safety conditions.
 ## Sound mode families / level vs. calibration / distance unit fix
 
 See [docs/SOUNDMODES_LEVELS_DISTANCES.md](docs/SOUNDMODES_LEVELS_DISTANCES.md) for the new sound-mode family API, read-only source-specific level diagnostics, distance unit conversions and remaining legacy calibration limitations.
+
+### Legacy Speaker Setup (AVR-X4100W generation)
+
+The library can read **persistent** Speaker Setup calibration levels and distances directly from the legacy receiver's HTML pages, independently of the GoForm model profile. Call `GetLegacySpeakerCalibrationAsync()` after initialization. No POST/Set commands are used. This is separate from OPTION/Channel Level Adjust and `CV?`. See [docs/LEGACY-SPEAKER-CALIBRATION.md](docs/LEGACY-SPEAKER-CALIBRATION.md).

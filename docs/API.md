@@ -653,3 +653,7 @@ response itself contains an explicit label; `ProfileChannelHint` is an existing
 model-profile assumption, not a dynamic name. Optional AJAX pages may be blocked
 or unavailable, in which case `Warnings` reports the failure. See
 [SPEAKER-DISCOVERY.md](SPEAKER-DISCOVERY.md).
+
+### Legacy persistent speaker calibration (read only)
+
+`DenonAvrClient.GetLegacySpeakerCalibrationAsync(CancellationToken)` requests the two server-rendered HTML content frames of older Denon receivers via HTTP GET. Its `DenonLegacySpeakerCalibrationSnapshot` includes `Levels` (native code, displayed name, signed dB) and `Distances` (native code, displayed name, meters, original display unit/value). Independent of model-specific profiles. This API does not control/set calibration and is not interchangeable with `GetChannelLevelAdjustmentsAsync()` or Telnet `CV?`. See `docs/LEGACY-SPEAKER-CALIBRATION.md`.
