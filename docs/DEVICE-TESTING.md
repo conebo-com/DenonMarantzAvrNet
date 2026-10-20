@@ -6,7 +6,7 @@ This checklist tests the library against a real Denon or Marantz receiver. It co
 
 - The receiver and computer are on the same reachable network.
 - Network control is enabled on the receiver.
-- The .NET 10 SDK is installed.
+- Visual Studio with the .NET Framework 4.8 targeting pack is installed.
 - The repository has been built:
 
 ```powershell
@@ -70,3 +70,9 @@ For a device-specific error, please record at least:
 - If possible, the associated raw XML response from the debugger
 
 An HTTP 200 status with an empty `<rx>` is not valid protocol content. On the AVC-X6800H, this was caused by a missing line break after the XML declaration; the library already adds that line break automatically.
+
+## Read-only speaker index inventory (new)
+
+See [SPEAKER-DISCOVERY.md](SPEAKER-DISCOVERY.md). The tester command 'Discover native speaker indices (read-only)' reads up to five AJAX pages. Note the separation of levels, distances, configuration and layout groups; none of these indices are equated by this method. Optional pages may be temporarily inaccessible. No receiver settings are changed.
+
+Offline parser checks on Windows: `dotnet run --project .\DenonMarantzAvrNet.Tests` (net48).

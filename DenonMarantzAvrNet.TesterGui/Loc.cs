@@ -69,6 +69,7 @@ namespace DenonMarantzAvrNet.TesterGui
             ["Volume up/down"] = "Lauter/Leiser",
             ["Mute"] = "Stumm",
             ["Select input (Telnet)"] = "Eingang wählen (Telnet)",
+            ["Discover native speaker indices (read-only)"] = "Native Lautsprecher-Indizes erkennen (nur Lesen)",
             ["Configured speakers (levels + distances)"] = "Konfigurierte Lautsprecher (Pegel + Distanzen)",
             ["Preset levels"] = "Preset-Pegel",
             ["Distances"] = "Distanzen",

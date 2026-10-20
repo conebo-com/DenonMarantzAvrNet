@@ -43,6 +43,7 @@ The library was developed primarily with a **Denon AVC-X6800H** and its `0301` c
   - Set levels from -12.0 to +12.0 dB or change them in steps
   - Set subwoofer channels to OFF and reset all channel levels to Denon factory values
 - Read and set the actual levels of the active speaker preset through the receiver-specific speaker web interface (X6800H: HTTP/11080; X6700H: HTTPS/10443)
+- Read-only native speaker index discovery (`DiscoverSpeakerIndicesAsync`) from the live speaker AJAX levels, distances, menu, configuration and optional layout pages; raw IDs and separate index namespaces are preserved, with profile hints clearly identified
 - Expose the number of speaker presets known for the detected receiver profile
 - Capture and restore persistent speaker-preset level snapshots
 - Read the active speaker preset and switch it through the speaker web interface; the call returns once the receiver confirms the new preset
@@ -65,6 +66,7 @@ The library was developed primarily with a **Denon AVC-X6800H** and its `0301` c
 - If the receiver is not known to the library, or reports no type name, a dialog lets you pick the most similar profile (6800 or 6700). The tester then runs in **compatibility mode**, which is shown in the main window.
 - Command list grouped by Status, Main Zone, Zones 2/3, Speakers (HTTP) and Audio / Levels (Telnet). Commands can be sent over Auto, HTTP, or Telnet where the library supports it.
 - Separate output panes for the result, the HTTP traffic and the Telnet traffic, read from the library log
+- A **Discover native speaker indices (read-only)** command for comparing native level/distance IDs and optional menu/layout metadata across receiver models
 - **Check receiver compatibility...** runs a set of **read-only** operations against your receiver, shows each result as green (ok), yellow (warning) or red (error), and prepares a JSON report. You can choose a regular or an anonymized report. The anonymized report leaves out the MAC address and host. The report is only shown and copied to the clipboard. **Nothing is sent automatically**: you paste it into an e-mail yourself.
 
 Some commands in the tester change receiver settings (power, volume, input, levels, distances, presets). The compatibility check does not.
@@ -84,6 +86,7 @@ The library targets `net48` and uses C# `latest`. It depends on `Microsoft.Bcl.A
 | --- | --- |
 | `DenonMarantzAvrNet` | Reusable class library |
 | `DenonMarantzAvrNet.TesterGui` | WPF tester and receiver compatibility check |
+| `DenonMarantzAvrNet.Tests` | Standalone, dependency-light net48 offline discovery regression checks |
 
 ## Referencing the library
 

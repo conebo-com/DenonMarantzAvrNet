@@ -1,7 +1,10 @@
-﻿namespace DenonMarantzAvrNet.Protocol;
+namespace DenonMarantzAvrNet.Protocol;
 
 internal static class DenonEndpoints
 {
+    internal static string SpeakerConfiguration(int type) =>
+        $"/ajax/speakers/get_config?type={type}&_={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+
     internal static string SpeakerPresetLevels() =>
         $"/ajax/speakers/get_config?type=5&_={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
 

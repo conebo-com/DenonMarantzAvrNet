@@ -450,6 +450,7 @@ namespace DenonMarantzAvrNet.TesterGui
                 new(zonesGroup, Loc.Get("Mute"), true, [zoneParameter, onOffParameter], ZoneMuteAsync),
                 new(zonesGroup, Loc.Get("Select input (Telnet)"), false, [zoneParameter, new(Loc.Get("Input name"), "Media Player")], ZoneInputAsync),
 
+                new(speakersGroup, Loc.Get("Discover native speaker indices (read-only)"), false, [], _ => ShowSpeakerDiscoveryAsync()),
                 new(speakersGroup, Loc.Get("Configured speakers (levels + distances)"), false, [], _ => ShowConfiguredSpeakersAsync()),
                 new(speakersGroup, Loc.Get("Preset levels"), false, [], _ => ShowPresetLevelsAsync()),
                 new(speakersGroup, Loc.Get("Distances"), false, [], _ => ShowDistancesAsync()),
@@ -592,6 +593,41 @@ namespace DenonMarantzAvrNet.TesterGui
                 : await Telnet.SetZone3InputAsync(input.Parameter2, Token);
             return Loc.Format("Telnet response: {0}", response);
             // <-----------
+        }
+
+        private async Task<string> ShowSpeakerDiscoveryAsync()
+        {
+            var report = await Client.DiscoverSpeakerIndicesAsync(Token);
+            var text = new StringBuilder();
+            text.AppendLine($"Profile: {report.ReceiverProfileId} | UTC: {report.CapturedUtc:O}");
+            text.AppendLine("Raw distance unit/step: " +
+                $"{report.DistanceUnitRaw ?? "?"} / {report.DistanceStepRaw ?? "?"}");
+            text.AppendLine("NOTE: Each endpoint has its OWN index space. Hints are profile-only, not live mappings.");
+
+            void Append(string title, IReadOnlyList<DenonSpeakerDiscoveryEntry> entries)
+            {
+                text.AppendLine();
+                text.AppendLine(title + " (" + entries.Count + "):");
+                foreach (var e in entries)
+                {
+                    text.AppendLine($"  #{e.NativeIndex,-3} raw={e.RawValue,-12} " +
+                        $"display={e.DisplayCode?.ToString() ?? "?"} " +
+                        $"receiverLabel={e.ReceiverLabel ?? "-"} " +
+                        $"profileHint={e.ProfileChannelHint?.ToString() ?? "-"}");
+                }
+            }
+
+            Append("Level indices (type=5)", report.LevelEntries);
+            Append("Distance indices (type=4)", report.DistanceEntries);
+            Append("SpeakerConfig indices (type=3; separate namespace)", report.ConfigurationEntries);
+            Append("Layout GROUP indices (type=15; NOT speaker indices)", report.LayoutGroupEntries);
+            text.AppendLine();
+            text.AppendLine("Setup menu (type=1):");
+            foreach (var item in report.MenuItems)
+                text.AppendLine($"  {item.Name}: {item.RawStatus}");
+            foreach (var warning in report.Warnings)
+                text.AppendLine("WARNING: " + warning);
+            return text.ToString();
         }
 
         private async Task<string> ShowConfiguredSpeakersAsync()

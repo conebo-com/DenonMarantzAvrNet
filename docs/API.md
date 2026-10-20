@@ -613,3 +613,21 @@ using var receiver = new DenonAvrClient("10.37.0.190");
 ```
 
 Do not create a new client for every individual request.
+
+## Native speaker index discovery (read-only)
+
+```csharp
+DenonSpeakerDiscoveryReport report = await receiver.DiscoverSpeakerIndicesAsync();
+foreach (var level in report.LevelEntries)
+{
+    Console.WriteLine($"index={level.NativeIndex}, raw={level.RawValue}, " +
+        $"receiverLabel={level.ReceiverLabel ?? "unknown"}");
+}
+```
+
+`LevelEntries`, `DistanceEntries`, `ConfigurationEntries` and `LayoutGroupEntries`
+are **separate native index namespaces**. `ReceiverLabel` is only set when the HTTP
+response itself contains an explicit label; `ProfileChannelHint` is an existing
+model-profile assumption, not a dynamic name. Optional AJAX pages may be blocked
+or unavailable, in which case `Warnings` reports the failure. See
+[SPEAKER-DISCOVERY.md](SPEAKER-DISCOVERY.md).

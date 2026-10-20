@@ -808,6 +808,26 @@ public sealed class DenonAvrClient : IDisposable
             cancellationToken);
     }
 
+    /// <summary>
+    /// Reads the native speaker indices from each AJAX page (levels, distances, menu,
+    /// configuration and layout). This does not change receiver settings and does not
+    /// equate indices from different pages. Unsupported optional pages produce warnings.
+    /// Profile mappings are returned as hints only, never as receiver-confirmed labels.
+    /// </summary>
+    public Task<DenonSpeakerDiscoveryReport> DiscoverSpeakerIndicesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var profile = GetReceiverProfile();
+        var options = profile.SpeakerDiscoveryOptions
+            ?? throw new NotSupportedException(
+                $"Speaker AJAX discovery is not configured for profile '{profile.Id}'.");
+        return DenonSpeakerDiscoveryReader.ReadAsync(
+            new DenonProfileContext(Host, _httpTransport),
+            options,
+            profile.Id,
+            cancellationToken);
+    }
+
     /// <summary>Reads the active speaker-preset levels using the selected receiver profile.</summary>
     public Task<IReadOnlyList<DenonSpeakerPresetLevel>> GetSpeakerPresetLevelsAsync(
         CancellationToken cancellationToken = default) =>
