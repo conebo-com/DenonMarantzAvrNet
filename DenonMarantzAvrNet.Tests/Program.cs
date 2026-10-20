@@ -35,7 +35,9 @@ internal static class Program
             TestReceiverProfileSelection();
             TestAppCommandResponseClassification();
             TestAppCommandPort80Discovery();
-            Console.WriteLine("Discovery/transport: 11 tests passed.");
+            TestLegacyInspectionWithoutLeakingValues();
+            TestLegacyEndpointProbeIsReadOnly();
+            Console.WriteLine("Discovery/transport: 13 tests passed.");
             return 0;
         }
         catch (Exception exception)
@@ -283,6 +285,71 @@ internal static class Program
             Check(receiver.HttpPort == 80 && receiver.AppCommandPort == 8080 &&
                   receiver.ReceiverCapabilities?.SupportsAppCommand == true,
                 "AppCommand may be on port 8080 even when Deviceinfo responded on 80.");
+        }
+    }
+
+    private static void TestLegacyInspectionWithoutLeakingValues()
+    {
+        var xml = DenonLegacyHttpResponseInspector.Inspect("Device info", "GET",
+            "/goform/Deviceinfo.xml",
+            "<Device_Info><MacAddress>00:11:22:33:44:55</MacAddress>" +
+            "<ModelName>AVR-X4100W</ModelName></Device_Info>");
+        Check(xml.Result == "Received" && xml.Root == "Device_Info" &&
+              xml.ElementPaths.Any(p => p.EndsWith("MacAddress")) &&
+              !string.Join(" ", xml.ElementPaths).Contains("00:11:22"),
+            "Legacy diagnostic must retain XML field names but never device values.");
+
+        var html = DenonLegacyHttpResponseInspector.Inspect("Web", "GET", "/",
+            "<html><a href='/Setup/Speakers.html'>Speakers</a>" +
+            "<a href='/goform/formiPhoneAppDirect.xml?MVUP'>Unsafe GET</a>" +
+            "<script src='/js/setup.js'></script></html>");
+        Check(html.Result == "Received" && html.Root == "HTML" &&
+              html.DiscoveredLinks.Contains("/Setup/Speakers.html") &&
+              !html.DiscoveredLinks.Any(x => x.Contains("?MVUP")),
+            "References can be inventoried but command links must never be fetched.");
+        var empty = DenonLegacyHttpResponseInspector.Inspect("Status", "POST", "/goform/AppCommand.xml", "<rx/>");
+        Check(empty.Result == "Rejected", "Empty AppCommand must not mean capability support.");
+        var unsafeXml = DenonLegacyHttpResponseInspector.Inspect("Unsafe", "GET", "/",
+            "<!DOCTYPE doc [<!ENTITY x SYSTEM 'file:///C:/private.txt'>]><doc>&x;</doc>");
+        Check(unsafeXml.Result == "Unparseable", "External entities must not be expanded.");
+    }
+
+    private static void TestLegacyEndpointProbeIsReadOnly()
+    {
+        var handler = new FakeLegacyDiscoveryHandler();
+        using (var transport = new DenonHttpTransport(handler, TimeSpan.FromSeconds(5)))
+        {
+            var report = DenonLegacyHttpDiscoveryReader.ReadAsync(
+                "receiver.example", 80, transport, CancellationToken.None).GetAwaiter().GetResult();
+            Check(report.Probes.Count == 10 && handler.Requests.Count == 10,
+                "All known read-only legacy probes should be attempted.");
+            Check(handler.Requests.All(r => r.Method == HttpMethod.Get || r.Method == HttpMethod.Post),
+                "Only known read-only HTTP endpoints and status POSTs may be used.");
+            Check(!handler.Requests.Any(r => r.RequestUri!.AbsolutePath.Contains("set_config") ||
+                r.RequestUri.Query.Contains("MVUP")),
+                "Discovery must never issue setup writes or command URLs.");
+            Check(report.Probes.Any(x => x.Name == "Legacy MainZone XML" && x.Result == "Received"),
+                "Legacy MainZone status must remain available independently of profiles.");
+        }
+    }
+
+    private sealed class FakeLegacyDiscoveryHandler : HttpMessageHandler
+    {
+        internal List<HttpRequestMessage> Requests { get; } = new List<HttpRequestMessage>();
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            var content = request.RequestUri!.AbsolutePath == "/"
+                ? "<html><a href='/setup/speakers.html'>Speakers</a></html>"
+                : request.RequestUri.AbsolutePath == "/goform/formMainZone_MainZoneXml.xml"
+                    ? "<item><Speaker><Levels>exists</Levels></Speaker></item>"
+                    : "<rx><cmd><status>ON</status></cmd></rx>";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(content)
+            });
         }
     }
 

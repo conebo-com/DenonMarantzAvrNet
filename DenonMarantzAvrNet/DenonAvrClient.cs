@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.Sockets;
 using System.Net.Http;
 using DenonMarantzAvrNet.Protocol;
@@ -885,6 +885,16 @@ public sealed class DenonAvrClient : IDisposable
             profile.Id,
             cancellationToken);
     }
+
+    /// <summary>
+    /// Diagnoses documented, read-only Legacy HTTP and AppCommand endpoints on
+    /// the detected HTTP port. This does not depend on an X4100W model profile.
+    /// No links discovered inside the web UI are followed automatically.
+    /// </summary>
+    public Task<DenonLegacyHttpDiscoveryReport> DiscoverLegacyHttpAsync(
+        CancellationToken cancellationToken = default) =>
+        DenonLegacyHttpDiscoveryReader.ReadAsync(
+            Host, GetInitializedPort(), _httpTransport, cancellationToken);
 
     /// <summary>Reads the active speaker-preset levels using the selected receiver profile.</summary>
     public Task<IReadOnlyList<DenonSpeakerPresetLevel>> GetSpeakerPresetLevelsAsync(

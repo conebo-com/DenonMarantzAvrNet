@@ -459,3 +459,11 @@ It verifies `AppCommandPort` and `AppCommand0300Port` getters during startup and
 is missing, shows the identity and physical path of the loaded library instead of throwing
 `MissingMethodException` during a support report. This is a binary/API integrity check,
 not a change in the receiver protocol. See `docs/DLL_COMPATIBILITY.md`.
+
+### Legacy HTTP diagnostics (AVR-X4100W generation)
+
+`DenonAvrClient.DiscoverLegacyHttpAsync()` performs an optional read-only inventory of
+known legacy web/XML and AppCommand status interfaces; no specific X4100W profile is
+required. The WPF compatibility report also provides `CV? raw diagnostic` to show the
+receiver's native channel adjustment list through `CVEND`. Details and caveats:
+[docs/LEGACY_HTTP_RESEARCH.md](docs/LEGACY_HTTP_RESEARCH.md).

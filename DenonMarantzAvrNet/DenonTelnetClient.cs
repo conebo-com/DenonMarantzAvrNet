@@ -1,4 +1,4 @@
-﻿using DenonMarantzAvrNet.Exceptions;
+using DenonMarantzAvrNet.Exceptions;
 using DenonMarantzAvrNet.Logger;
 using DenonMarantzAvrNet.Models;
 using DenonMarantzAvrNet.Profiles;
@@ -213,6 +213,15 @@ public sealed class DenonTelnetClient
 
         return SendCommandAsync($"DC{protocolMode}", cancellationToken);
     }
+
+    /// <summary>
+    /// Returns every receiver-confirmed line of the read-only CV? query, including
+    /// CVEND. Do not equate missing channels with unconfigured speakers: this is
+    /// the current channel-level-adjustment list, not Audyssey calibration.
+    /// </summary>
+    public Task<IReadOnlyList<string>> QueryRawChannelLevelsAsync(
+        CancellationToken cancellationToken = default) =>
+        SendCommandUntilAsync("CV?", "CVEND", cancellationToken);
 
     /// <summary>Reads one channel level through its specific Denon CV command.</summary>
     public async Task<DenonSpeakerLevel> GetSpeakerLevelAsync(

@@ -15,3 +15,11 @@
 - Share one Telnet TCP session per host between command clients and event listeners, serialize requests and filter unrelated status messages from command replies.
 - Add read-only port-80 HTTP and local fake-receiver Telnet regression tests and diagnostics documentation.
 - Preserve existing speaker setup readers, writers, and device-specific mappings; no new unverified speaker writes.
+
+### Legacy HTTP investigation (2026-10-20)
+
+- Add fixed, read-only Legacy HTTP/XML endpoint inventory for AVR-X4100W-era receivers (no model-specific profile needed for the probe).
+- Add complete raw `CV?` diagnostic through `CVEND`, independent of speaker channel name mappings.
+- Extend WPF compatibility report with both diagnostics; XML field **names** only to avoid exposing private values.
+- Add two offline regression checks and research notes in `docs/LEGACY_HTTP_RESEARCH.md`.
+- No changes to speaker calibration readers/writers, volume, or sound mode controls.

@@ -1,4 +1,4 @@
-﻿using DenonMarantzAvrNet;
+using DenonMarantzAvrNet;
 using DenonMarantzAvrNet.Exceptions;
 using DenonMarantzAvrNet.Models;
 using System.Collections.ObjectModel;
@@ -192,6 +192,8 @@ namespace DenonMarantzAvrNet.TesterGui
             new("Speakers (HTTP)", "Preset levels", ReadPresetLevelsAsync),
             new("Speakers (HTTP)", "Distances", ReadDistancesAsync),
             new("Speakers (HTTP)", "Configured speakers", ReadConfiguredSpeakersAsync),
+            new("Receiver", "Legacy HTTP discovery (read only)", ReadLegacyHttpDiscoveryAsync),
+            new("Telnet", "CV? raw diagnostic", ReadRawChannelLevelsAsync),
             new("Telnet", "Channel levels", ReadChannelLevelsAsync),
             new("Telnet", "Power (PW?)", token => TelnetQueryAsync(_telnetClient.QueryPowerAsync, token)),
             new("Telnet", "Volume (MV?)", token => TelnetQueryAsync(_telnetClient.QueryVolumeAsync, token)),
@@ -377,6 +379,41 @@ namespace DenonMarantzAvrNet.TesterGui
 
             return Ok(builder.ToString().TrimEnd());
             // <-----------
+        }
+
+        private async Task<OperationResult> ReadLegacyHttpDiscoveryAsync(CancellationToken cancellationToken)
+        {
+            var report = await _client.DiscoverLegacyHttpAsync(cancellationToken);
+            var builder = new StringBuilder();
+            foreach (var probe in report.Probes)
+            {
+                builder.AppendLine($"{probe.Method} {probe.Path}: {probe.Result} ({probe.Name})");
+                if (!string.IsNullOrWhiteSpace(probe.Root))
+                    builder.AppendLine($"  Root: {probe.Root}");
+                foreach (var path in probe.ElementPaths)
+                    builder.AppendLine($"  XML: {path}");
+                foreach (var link in probe.DiscoveredLinks)
+                    builder.AppendLine($"  Web reference (not fetched): {link}");
+                if (!string.IsNullOrEmpty(probe.Note))
+                    builder.AppendLine($"  Note: {probe.Note}");
+            }
+            // No private XML values are copied into the compatibility report.
+            return report.Probes.Any(p => p.Result == "Received")
+                ? Ok(builder.ToString().TrimEnd())
+                : Warning(builder.ToString().TrimEnd());
+        }
+
+        private async Task<OperationResult> ReadRawChannelLevelsAsync(CancellationToken cancellationToken)
+        {
+            var lines = await _telnetClient.QueryRawChannelLevelsAsync(cancellationToken);
+            var builder = new StringBuilder();
+            foreach (var line in lines) builder.AppendLine(line);
+            var completed = lines.Any(line => string.Equals(line, "CVEND", StringComparison.OrdinalIgnoreCase));
+            var channels = lines.Count(line => line.StartsWith("CV", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(line, "CVEND", StringComparison.OrdinalIgnoreCase));
+            builder.AppendLine($"Response complete: {completed}; channel entries: {channels}");
+            builder.AppendLine("CV reports channel-level adjustment, not calibration or wiring.");
+            return completed ? Ok(builder.ToString().TrimEnd()) : Warning(builder.ToString().TrimEnd());
         }
 
         private async Task<OperationResult> ReadChannelLevelsAsync(CancellationToken cancellationToken)
