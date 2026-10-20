@@ -1,4 +1,4 @@
-using DenonMarantzAvrNet.Exceptions;
+﻿using DenonMarantzAvrNet.Exceptions;
 using DenonMarantzAvrNet.Logger;
 using DenonMarantzAvrNet.Models;
 using DenonMarantzAvrNet.Profiles;
@@ -224,9 +224,22 @@ public sealed class DenonTelnetClient
     public async Task<IReadOnlyList<DenonSoundModeOption>> GetSoundModeOptionsAsync(
         CancellationToken cancellationToken = default)
     {
-        var lines = await SendCommandUntilAsync("OPSMLALL?", "OPSMLALL END", cancellationToken)
-            .ConfigureAwait(false);
-        return Discovery.DenonSoundModeListReader.Parse(lines);
+        // This extension is missing on multiple legacy generations. Never stall
+        // the whole compatibility report for the default 30-second AVR timeout.
+        using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        {
+            deadline.CancelAfter(TimeSpan.FromSeconds(3));
+            try
+            {
+                var lines = await SendCommandUntilAsync("OPSMLALL?", "OPSMLALL END", deadline.Token)
+                    .ConfigureAwait(false);
+                return Discovery.DenonSoundModeListReader.Parse(lines);
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new IOException("OPSMLALL is not confirmed by this receiver (3-second deadline).", ex);
+            }
+        }
     }
 
     /// <summary>Sets the digital input decoder to <c>Auto</c>, <c>PCM</c> or <c>DTS</c>.</summary>

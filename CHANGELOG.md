@@ -57,3 +57,13 @@
 - Expose `DiscoverSpeakerMatrixAsync()` and include a privacy-conscious read-only operation in WPF support reports.
 - Add parser/HTTP port 80 tests and update legacy speaker research notes.
 - Reconfirm CV? returned exactly two adjustments at standby; no setup/calibration writes were added.
+
+## Integrated sound modes and persistent calibration (2026-10-20)
+
+- Added unified `GetSpeakerCalibrationAsync()` for legacy speaker-setup HTML and modern speaker AJAX, with canonical native channel codes and independent level/distance indices.
+- Added guarded `SetCalibrationLevelAsync()` and `SetCalibrationDistanceAsync()` with fresh page reads, one-channel updates and mandatory readback. Legacy HTML POST requires explicit opt-in; its live write behavior has **not** yet been verified on the AVR-X4100W.
+- Added `SelectSoundModeFamilyAndReadBackAsync()` to distinguish a family button request from the actual receiver sound mode (e.g. `MSGAME` responding `MSDTS NEO:X G`).
+- Shortened optional `OPSMLALL` timeout to three seconds, retaining the separately advertised sound mode catalog for older receivers.
+- Added WPF one-pass sound family test with attempted restoration, a unified speaker calibration view and explicit confirmation for persistent writes.
+- Fixed legacy HTML speaker label extraction and canonical SW2/SW3/SW4 speaker naming; added offline payload and mapping checks.
+- .NET Framework 4.8 remains the sole target. Windows builds and hardware WRITE tests are required before claiming complete write support.

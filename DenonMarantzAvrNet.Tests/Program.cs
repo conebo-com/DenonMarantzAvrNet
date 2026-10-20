@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
@@ -50,7 +50,9 @@ internal static class Program
             TestLegacyCalibrationValues();
             TestLegacyCalibrationRejectsBadPages();
             TestLegacyCalibrationGetOnly();
-            Console.WriteLine("Discovery/transport: 25 tests passed.");
+            TestUnifiedCalibrationPayloads();
+            TestCanonicalSpeakerChannelCodes();
+            Console.WriteLine("Discovery/transport: 27 tests passed.");
             return 0;
         }
         catch (Exception exception)
@@ -81,6 +83,34 @@ internal static class Program
       <tr><td><b>Top Middle L</b></td><td><input type='text' name='textDelayTimeTML' value='5.00'></td></tr>
       <tr><td><b>Future channel</b></td><td><input type='text' name='textDelayTimeXYZ' value='2.00'></td></tr>
       </FORM></body></html>";
+
+    private static void TestUnifiedCalibrationPayloads()
+    {
+        var levels = DenonLegacySpeakerCalibrationReader.BuildLevelForm(
+            LegacyLevelsFixture, "fl", -5.5);
+        Check(levels["textCVFL"] == "-5.5" && levels["textCVTML"] == "-2.0" &&
+            levels["textCVXYZ"] == "1.5" && levels["setCLA"] == "Set" &&
+            levels["setSetupLock"] == "OFF", "Level form must modify only one channel.");
+        var distances = DenonLegacySpeakerCalibrationReader.BuildDistanceForm(
+            LegacyDistancesFixture, "FL", 3.048);
+        Check(distances["textDelayTimeFl"] == "10.00" &&
+            distances["textDelayTimeTML"] == "5.00" &&
+            distances["radioDelayTimeMode"] == "F" &&
+            distances["setDelayTimeAllSet"] == "off",
+            "Distance form must preserve units and other channels.");
+        var malformed = LegacyLevelsFixture.Replace("<tr><td><B>Front L</B>",
+            "<tr><td>Manually adjusts the levels for each channel <B>Front L</B>");
+        Check(DenonLegacySpeakerCalibrationReader.ParseLevels(malformed)[0].DisplayName == "Front L",
+            "Help text must not contaminate a channel label.");
+    }
+
+    private static void TestCanonicalSpeakerChannelCodes()
+    {
+        Check(SpeakerChannelParser.ToNativeCode(SpeakerChannel.TopMiddleLeft) == "TML" &&
+            SpeakerChannelParser.ToNativeCode(SpeakerChannel.Subwoofer2) == "SW2" &&
+            SpeakerChannelParser.Parse(new[] { "SW2" }) == SpeakerChannel.Subwoofer2,
+            "Modern and legacy setup must use the same canonical native channel codes.");
+    }
 
     private static void TestLegacyCalibrationValues()
     {

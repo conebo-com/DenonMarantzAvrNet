@@ -486,3 +486,24 @@ See [docs/SOUNDMODES_LEVELS_DISTANCES.md](docs/SOUNDMODES_LEVELS_DISTANCES.md) f
 ### Legacy Speaker Setup (AVR-X4100W generation)
 
 The library can read **persistent** Speaker Setup calibration levels and distances directly from the legacy receiver's HTML pages, independently of the GoForm model profile. Call `GetLegacySpeakerCalibrationAsync()` after initialization. No POST/Set commands are used. This is separate from OPTION/Channel Level Adjust and `CV?`. See [docs/LEGACY-SPEAKER-CALIBRATION.md](docs/LEGACY-SPEAKER-CALIBRATION.md).
+
+### Integrated Sound/Calibration API (`net48`)
+
+```csharp
+var calibration = await receiver.GetSpeakerCalibrationAsync(); // GET only
+foreach (var ch in calibration.Channels)
+    Console.WriteLine($"{ch.NativeChannelCode}: {ch.LevelDecibels} dB, {ch.DistanceMeters} m");
+
+var result = await receiver.SelectSoundModeFamilyAndReadBackAsync(DenonSoundModeFamily.Game);
+Console.WriteLine(result.CurrentModeResponse); // e.g. "MSDTS NEO:X G"
+
+// Persistent writes are never part of diagnostics. LEGACY web-form POST is
+// experimental and requires allowExperimentalLegacyWrite: true:
+// await receiver.SetCalibrationLevelAsync("FL", -6.0, allowExperimentalLegacyWrite: true);
+```
+
+The WPF GUI has a new `Calibration (AUTO: HTML / AJAX, read only)` command and a
+`ONE-PASS Sound family test (switch and restore)` command. The optional
+`OPSMLALL` read query may be unavailable on older Denon units and does not
+indicate that MOVIE/MUSIC/GAME/PURE buttons are unsupported. Refer to
+`docs/INTEGRATED-CALIBRATION-AND-SOUNDMODES.md` for limitations and safety.

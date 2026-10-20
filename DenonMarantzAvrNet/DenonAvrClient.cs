@@ -1076,6 +1076,179 @@ public sealed class DenonAvrClient : IDisposable
         return page.Speakers;
     }
 
+    /// <summary>
+    /// Reads persistent calibration through the correct receiver family without
+    /// forcing consumers to handle legacy HTML vs modern speaker AJAX.
+    /// The snapshot is a read-only representation and is NOT the per-input CV trim.
+    /// </summary>
+    public async Task<DenonSpeakerCalibrationSnapshot> GetSpeakerCalibrationAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        var profile = GetReceiverProfile();
+        var channels = new Dictionary<string, DenonCalibrationChannel>(StringComparer.OrdinalIgnoreCase);
+        if (profile.SupportsSpeakerPresetLevels && profile.SupportsSpeakerDistances)
+        {
+            var context = new DenonProfileContext(Host, _httpTransport);
+            var levels = await profile.SpeakerPresetLevels.GetLevelsAsync(context, cancellationToken)
+                .ConfigureAwait(false);
+            var distances = await profile.SpeakerDistances.GetDistancesAsync(context, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var level in levels)
+            {
+                // Do not merge aggregate multichannel pseudo-indices with individual speakers.
+                var native = level.Channel.HasValue && IsSingleChannel(level.Channel.Value)
+                    ? ChannelName(level.Channel.Value) : "LEVEL#" + level.SpeakerIndex;
+                channels[native] = new DenonCalibrationChannel(native, native,
+                    level.Decibels, null, level.SpeakerIndex);
+            }
+            foreach (var distance in distances.Speakers)
+            {
+                var native = distance.Channel.HasValue && IsSingleChannel(distance.Channel.Value)
+                    ? ChannelName(distance.Channel.Value) : "DISTANCE#" + distance.SpeakerIndex;
+                if (channels.TryGetValue(native, out var value))
+                    channels[native] = value with { DistanceMeters = distance.Meters,
+                        DistanceIndex = distance.SpeakerIndex };
+                else
+                    channels[native] = new DenonCalibrationChannel(native, native, null,
+                        distance.Meters, null, distance.SpeakerIndex);
+            }
+            return new DenonSpeakerCalibrationSnapshot("Modern speaker AJAX", DateTimeOffset.UtcNow,
+                channels.Values.OrderBy(x => x.NativeChannelCode).ToArray());
+        }
+
+        // No model-specific mapping: dynamically check the actual legacy web pages.
+        var legacy = await GetLegacySpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var level in legacy.Levels)
+            channels.Add(level.NativeChannelCode, new DenonCalibrationChannel(
+                level.NativeChannelCode, level.DisplayName, level.Decibels, null));
+        foreach (var distance in legacy.Distances)
+        {
+            if (channels.TryGetValue(distance.NativeChannelCode, out var value))
+                channels[distance.NativeChannelCode] = value with { DistanceMeters = distance.Meters };
+            else channels.Add(distance.NativeChannelCode, new DenonCalibrationChannel(
+                distance.NativeChannelCode, distance.DisplayName, null, distance.Meters));
+        }
+        return new DenonSpeakerCalibrationSnapshot("Legacy speaker HTML", DateTimeOffset.UtcNow,
+            channels.Values.OrderBy(x => x.NativeChannelCode).ToArray());
+    }
+
+    private static bool IsSingleChannel(SpeakerChannel channel)
+    {
+        var bits = (ulong)channel;
+        return bits != 0 && (bits & (bits - 1)) == 0;
+    }
+
+    private static string ChannelName(SpeakerChannel channel) =>
+        SpeakerChannelParser.ToNativeCode(channel);
+
+    /// <summary>
+    /// Sends a family-button command and then reads MS? to expose the actual mode.
+    /// For example MSGAME may legitimately resolve to MSDTS NEO:X G.
+    /// </summary>
+    public async Task<DenonSoundModeSelectionResult> SelectSoundModeFamilyAndReadBackAsync(
+        DenonSoundModeFamily family, CancellationToken cancellationToken = default)
+    {
+        var response = await SelectSoundModeFamilyAsync(family, cancellationToken).ConfigureAwait(false);
+        var current = await _telnetClient.QuerySurroundModeAsync(cancellationToken).ConfigureAwait(false);
+        return new DenonSoundModeSelectionResult(family, response, current);
+    }
+
+    /// <summary>
+    /// Receiver-advertised Main Zone mode catalog. This is NOT a signal-dependent
+    /// Movie/Music/Game submenu; unlike OPSMLALL it works on legacy receivers.
+    /// </summary>
+    public IReadOnlyList<DenonAdvertisedSoundMode> GetAdvertisedSoundModeCatalog() =>
+        DeviceCapabilities?.SoundModes ?? Array.Empty<DenonAdvertisedSoundMode>();
+
+    /// <summary>
+    /// Changes one persistent calibration LEVEL. On legacy receivers the write is
+    /// experimental and opt-in. The web form is rebuilt from a fresh GET; after
+    /// submission a second GET MUST confirm the requested value.
+    /// </summary>
+    public async Task SetCalibrationLevelAsync(string nativeChannelCode, double decibels,
+        bool allowExperimentalLegacyWrite = false,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        NetFrameworkCompat.ThrowIfNullOrWhiteSpace(nativeChannelCode, nameof(nativeChannelCode));
+        if (double.IsNaN(decibels) || double.IsInfinity(decibels) ||
+            decibels < -12 || decibels > 12 || Math.Abs(decibels * 2 - Math.Round(decibels * 2)) > 0.000001)
+            throw new ArgumentOutOfRangeException(nameof(decibels));
+        var profile = GetReceiverProfile();
+        if (profile.SupportsSpeakerPresetLevels && profile.SupportsSpeakerDistances)
+        {
+            var current = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
+            var channel = current.Channels.SingleOrDefault(x =>
+                string.Equals(x.NativeChannelCode, nativeChannelCode, StringComparison.OrdinalIgnoreCase));
+            if (channel is null || channel.LevelIndex is null)
+                throw new ArgumentException("Unknown persistent level channel or index.", nameof(nativeChannelCode));
+            await SetSpeakerPresetLevelAsync(channel.LevelIndex.Value, decibels, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            if (!allowExperimentalLegacyWrite)
+                throw new NotSupportedException("Legacy speaker form writes require explicit opt-in and a backup.");
+            var port = GetInitializedPort();
+            var path = DenonLegacySpeakerCalibrationReader.LevelsPath;
+            var originalHtml = await _httpTransport.GetStringAsync(Host, port, path, cancellationToken)
+                .ConfigureAwait(false);
+            var form = DenonLegacySpeakerCalibrationReader.BuildLevelForm(originalHtml,
+                nativeChannelCode, decibels);
+            _ = await _httpTransport.PostFormAsync(Host, port,
+                "/SETUP/SPEAKERS/LEVELS/s_speakersetup.asp", form, cancellationToken).ConfigureAwait(false);
+        }
+        var verified = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
+        var actual = verified.Channels.SingleOrDefault(x =>
+            string.Equals(x.NativeChannelCode, nativeChannelCode, StringComparison.OrdinalIgnoreCase));
+        var confirmedLevel = actual?.LevelDecibels;
+        if (!confirmedLevel.HasValue || Math.Abs(confirmedLevel.Value - decibels) > 0.01)
+            throw new InvalidOperationException("Level write was sent but NOT confirmed by readback.");
+    }
+
+    /// <summary>Changes a persistent distance in meters, with explicit legacy opt-in and readback.</summary>
+    public async Task SetCalibrationDistanceAsync(string nativeChannelCode, double meters,
+        bool allowExperimentalLegacyWrite = false,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        NetFrameworkCompat.ThrowIfNullOrWhiteSpace(nativeChannelCode, nameof(nativeChannelCode));
+        if (double.IsNaN(meters) || double.IsInfinity(meters) || meters <= 0 || meters > 18)
+            throw new ArgumentOutOfRangeException(nameof(meters));
+        var profile = GetReceiverProfile();
+        if (profile.SupportsSpeakerPresetLevels && profile.SupportsSpeakerDistances)
+        {
+            var current = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
+            var channel = current.Channels.SingleOrDefault(x =>
+                string.Equals(x.NativeChannelCode, nativeChannelCode, StringComparison.OrdinalIgnoreCase));
+            if (channel is null || channel.DistanceIndex is null)
+                throw new ArgumentException("Unknown persistent distance channel or index.", nameof(nativeChannelCode));
+            await SetSpeakerDistanceAsync(channel.DistanceIndex.Value, meters, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            if (!allowExperimentalLegacyWrite)
+                throw new NotSupportedException("Legacy distance form writes require explicit opt-in and a backup.");
+            var port = GetInitializedPort();
+            var path = DenonLegacySpeakerCalibrationReader.DistancesPath;
+            var originalHtml = await _httpTransport.GetStringAsync(Host, port, path, cancellationToken)
+                .ConfigureAwait(false);
+            var form = DenonLegacySpeakerCalibrationReader.BuildDistanceForm(originalHtml,
+                nativeChannelCode, meters);
+            _ = await _httpTransport.PostFormAsync(Host, port,
+                "/SETUP/SPEAKERS/DISTANCES/s_speakersetup.asp", form, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        var verified = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
+        var actual = verified.Channels.SingleOrDefault(x =>
+            string.Equals(x.NativeChannelCode, nativeChannelCode, StringComparison.OrdinalIgnoreCase));
+        var confirmedDistance = actual?.DistanceMeters;
+        if (!confirmedDistance.HasValue || Math.Abs(confirmedDistance.Value - meters) > 0.035)
+            throw new InvalidOperationException("Distance write was sent but NOT confirmed by readback.");
+    }
+
     /// <summary>Reads the active speaker-preset levels using the selected receiver profile.</summary>
     public Task<IReadOnlyList<DenonSpeakerPresetLevel>> GetSpeakerPresetLevelsAsync(
         CancellationToken cancellationToken = default) =>

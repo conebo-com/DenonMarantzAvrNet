@@ -147,6 +147,60 @@ internal static class DenonLegacySpeakerCalibrationReader
         return new LegacyDistancesPage(unit, speakers);
     }
 
+    /// <summary>
+    /// Builds exactly the form payload the X4100W web UI sends for a single
+    /// calibration-level change. This method performs no HTTP request.
+    /// Unknown channel fields are preserved, never synthesized.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string> BuildLevelForm(
+        string html, string nativeCode, double decibels)
+    {
+        var current = ParseLevels(html);
+        if ((double.IsNaN(decibels) || double.IsInfinity(decibels)) || decibels < -12 || decibels > 12 ||
+            Math.Abs(decibels * 2 - Math.Round(decibels * 2)) > 1e-7)
+            throw new ArgumentOutOfRangeException(nameof(decibels));
+        var selected = current.SingleOrDefault(x =>
+            string.Equals(x.NativeChannelCode, nativeCode, StringComparison.OrdinalIgnoreCase))
+            ?? throw new ArgumentException("Channel is not present in the currently reported setup page.", nameof(nativeCode));
+        var form = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var level in current)
+            form.Add(level.FormFieldName, (level.NativeChannelCode == selected.NativeChannelCode
+                ? decibels : level.Decibels).ToString("0.0", CultureInfo.InvariantCulture));
+        form.Add("setPureDirectOn", "OFF");
+        form.Add("setSetupLock", "OFF");
+        form.Add("setCLA", "Set"); // explicitly set by buttonClickSet() in captured HTML
+        return form;
+    }
+
+    /// <summary>
+    /// Reconstructs the documented distance form, preserving all other fields.
+    /// Only the original display unit is used, with no implicit unit switch.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string> BuildDistanceForm(
+        string html, string nativeCode, double meters)
+    {
+        var page = ParseDistances(html);
+        if (double.IsNaN(meters) || double.IsInfinity(meters) || meters <= 0 || meters > 18)
+            throw new ArgumentOutOfRangeException(nameof(meters));
+        var selected = page.Speakers.SingleOrDefault(x =>
+            string.Equals(x.NativeChannelCode, nativeCode, StringComparison.OrdinalIgnoreCase))
+            ?? throw new ArgumentException("Channel is not present in the currently reported distance page.", nameof(nativeCode));
+        var form = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        form.Add("radioDelayTimeMode", page.Unit == DenonSpeakerDistanceUnit.Feet ? "F" : "M");
+        foreach (var distance in page.Speakers)
+        {
+            var value = distance.NativeChannelCode == selected.NativeChannelCode
+                ? meters / (page.Unit == DenonSpeakerDistanceUnit.Feet ? 0.3048 : 1.0)
+                : distance.OriginalValue;
+            form.Add(distance.FormFieldName, value.ToString("0.00", CultureInfo.InvariantCulture));
+        }
+        // The captured distance page's onClick submits the form without changing this flag.
+        form.Add("setPureDirectOn", "OFF");
+        form.Add("setSetupLock", "OFF");
+        form.Add("setDelayTimeAllSet", "off");
+        return form;
+    }
+
     private static void EnsureCorrectPage(string html, string pageMarker)
     {
         if (string.IsNullOrEmpty(html) || html.Length > MaximumHtmlLength ||
@@ -199,10 +253,14 @@ internal static class DenonLegacySpeakerCalibrationReader
 
     private static string ReadDisplayName(string row, string fallback)
     {
-        var cell = FirstCellPattern.Match(row);
-        if (!cell.Success)
-            return fallback;
-        var label = WebUtility.HtmlDecode(StripTagsPattern.Replace(cell.Groups["text"].Value, ""));
+        // Some firmware emits malformed TR/TD nesting in the introductory help
+        // text, so the first TD can contain the help sentence AND "Front L".
+        // Prefer the last bold label *before* the input we are parsing.
+        var bold = Regex.Matches(row, @"<b\b[^>]*>(?<label>[^<]{1,80})</b\s*>",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, MatchTimeout);
+        var raw = bold.Count > 0 ? bold[bold.Count - 1].Groups["label"].Value :
+            FirstCellPattern.Match(row).Groups["text"].Value;
+        var label = WebUtility.HtmlDecode(StripTagsPattern.Replace(raw, ""));
         label = CollapseSpacesPattern.Replace(label.Replace('\u00a0', ' '), " ").Trim();
         return label.Length is > 0 and <= 80 ? label : fallback;
     }

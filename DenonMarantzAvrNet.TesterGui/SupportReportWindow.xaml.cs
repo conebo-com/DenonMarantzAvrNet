@@ -195,6 +195,7 @@ namespace DenonMarantzAvrNet.TesterGui
             new("Receiver", "Legacy HTTP discovery (read only)", ReadLegacyHttpDiscoveryAsync),
             new("Receiver", "Device capabilities (dynamic, read only)", ReadDeviceCapabilitiesAsync),
             new("Receiver", "Advertised read commands (experimental)", ReadAdvertisedReadCommandsAsync),
+            new("Speakers (HTTP)", "Unified persistent calibration (read only)", ReadUnifiedCalibrationAsync),
             new("Speakers (HTTP)", "Legacy calibration levels (read only)", ReadLegacyCalibrationLevelsAsync),
             new("Speakers (HTTP)", "Legacy calibration distances (read only)", ReadLegacyCalibrationDistancesAsync),
             new("Speakers (HTTP)", "Channel Level Adjust (per-input, NOT calibration)", ReadChannelAdjustmentsAsync),
@@ -443,6 +444,20 @@ namespace DenonMarantzAvrNet.TesterGui
             {
                 return Warning("Legacy calibration Distances page unrecognized: " + exception.Message);
             }
+        }
+
+        private async Task<OperationResult> ReadUnifiedCalibrationAsync(CancellationToken cancellationToken)
+        {
+            var setup = await _client.GetSpeakerCalibrationAsync(cancellationToken);
+            var b = new StringBuilder();
+            b.AppendLine("Source: " + setup.Source);
+            b.AppendLine("Channels with level: " + setup.Channels.Count(x => x.LevelDecibels.HasValue));
+            b.AppendLine("Channels with distance: " + setup.Channels.Count(x => x.DistanceMeters.HasValue));
+            foreach (var speaker in setup.Channels)
+                b.AppendLine($"  {SafeAdjustmentToken(speaker.NativeChannelCode),-8} " +
+                    $"level={(speaker.LevelDecibels.HasValue ? speaker.LevelDecibels.Value.ToString("0.0", CultureInfo.InvariantCulture) : "-")} " +
+                    $"distance={(speaker.DistanceMeters.HasValue ? speaker.DistanceMeters.Value.ToString("0.00", CultureInfo.InvariantCulture) : "-")}");
+            return Ok(b.ToString().TrimEnd());
         }
 
         private async Task<OperationResult> ReadChannelAdjustmentsAsync(CancellationToken cancellationToken)
