@@ -1,4 +1,4 @@
-# API documentation
+﻿# API documentation
 
 This document describes the publicly usable types and intended lifecycle of `DenonAvrNet`.
 
@@ -66,6 +66,28 @@ Task<DenonDeviceInfo> InitializeAsync(
 The method queries `Deviceinfo.xml` on port 80 first and then port 8080. Initialization completes only when the Denon response is syntactically and semantically valid.
 
 On success, `HttpPort`, `DeviceInfo`, `ReceiverProfileId`, and initially known `ReceiverCapabilities` are set. If both ports fail, a `DenonConnectionException` is thrown; its inner `AggregateException` contains the individual errors.
+
+### Dynamic capability catalog (profile-independent)
+
+After `InitializeAsync()`, `DeviceCapabilities` exposes the advertised
+`Deviceinfo.xml` catalog. It is read from the initialization response without
+an extra request. `RefreshDeviceCapabilitiesAsync()` explicitly refreshes the
+catalog; `ProbeAdvertisedReadCommandsAsync()` investigates `GetChLevel` and
+`GetSoundModeList` via read-only HTTP. These methods are **separate** from
+`ReceiverCapabilities` (transport/zone discovery) and from speaker AJAX
+calibration providers. The catalog never proves that an advertised write
+method works or that all listed channel types are connected.
+
+```csharp
+await receiver.InitializeAsync();
+var catalog = receiver.DeviceCapabilities;
+foreach (var channel in catalog.Channels)
+    Console.WriteLine(channel.NativeCode + " " + channel.Step);
+var readProbes = await receiver.ProbeAdvertisedReadCommandsAsync();
+```
+
+See [Dynamic capabilities](DYNAMIC-CAPABILITIES.md) for evidence levels,
+limitations and read-only hardware validation.
 
 ### Receiver-specific HTTP profiles
 

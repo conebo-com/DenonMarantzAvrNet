@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Net.Sockets;
 using System.Net.Http;
 using DenonMarantzAvrNet.Protocol;
@@ -6,6 +6,7 @@ using DenonMarantzAvrNet.Transport;
 using DenonMarantzAvrNet.Models;
 using DenonMarantzAvrNet.Profiles;
 using DenonMarantzAvrNet.Exceptions;
+using DenonMarantzAvrNet.Discovery;
 
 namespace DenonMarantzAvrNet;
 
@@ -86,6 +87,9 @@ public sealed class DenonAvrClient : IDisposable
     /// <summary>Port which actually answered AppCommand0300.xml with useful data.</summary>
     public int? AppCommand0300Port { get; private set; }
 
+    /// <summary>Last receiver-advertised capability catalog; no model profile is applied.</summary>
+    public DenonDeviceCapabilityDiscovery? DeviceCapabilities { get; private set; }
+
     /// <summary>Gets the device information returned by the last initialization.</summary>
     public DenonDeviceInfo? DeviceInfo { get; private set; }
 
@@ -133,6 +137,16 @@ public sealed class DenonAvrClient : IDisposable
                 var deviceInfo = DenonXmlParser.ParseDeviceInfo(xml);
                 HttpPort = port;
                 DeviceInfo = deviceInfo;
+                // Parsing metadata is optional and must never stop basic receiver access.
+                try
+                {
+                    DeviceCapabilities = DenonDeviceCapabilityReader.Parse(xml, port);
+                }
+                catch (Exception exception) when (exception is System.Xml.XmlException ||
+                    exception is InvalidDataException)
+                {
+                    DeviceCapabilities = null;
+                }
                 _receiverProfile = DenonReceiverProfileRegistry.Select(deviceInfo, port);
                 AppCommandPort = null;
                 AppCommandPort = await DiscoverAppCommandPortAsync(port, cancellationToken)
@@ -912,6 +926,81 @@ public sealed class DenonAvrClient : IDisposable
             cancellationToken).ConfigureAwait(false);
         return DenonSpeakerMatrixDiscoveryReader.Parse(xml,
             xml == null ? (int?)null : AppCommand0300Port);
+    }
+
+    /// <summary>
+    /// Re-reads the full Deviceinfo capability catalog independently of model profiles.
+    /// The resulting metadata is advertised, not necessarily runtime-verifiable.
+    /// No writes are sent. The raw XML, MAC address and host are not stored here.
+    /// </summary>
+    public async Task<DenonDeviceCapabilityDiscovery> RefreshDeviceCapabilitiesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var port = GetInitializedPort();
+        var xml = await _httpTransport.GetStringAsync(
+            Host, port, DenonEndpoints.DeviceInfo, cancellationToken).ConfigureAwait(false);
+        var discovered = DenonDeviceCapabilityReader.Parse(xml, port);
+        DeviceCapabilities = discovered;
+        return discovered;
+    }
+
+    /// <summary>
+    /// Tests two advertised read commands on both XML protocol families. A response
+    /// whose structure is recognized is NOT proof that all returned values are
+    /// semantically usable; these probes never send Set commands.
+    /// </summary>
+    public async Task<IReadOnlyList<DenonReadCommandProbe>> ProbeAdvertisedReadCommandsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var port = GetInitializedPort();
+        var capabilities = DeviceCapabilities ??
+            await RefreshDeviceCapabilitiesAsync(cancellationToken).ConfigureAwait(false);
+        var probes = new List<DenonReadCommandProbe>();
+        foreach (var command in new[] { "GetChLevel", "GetSoundModeList" })
+        {
+            if (!capabilities.IsCommandAdvertised(command))
+            {
+                probes.Add(new DenonReadCommandProbe(command, "Deviceinfo.xml", port,
+                    "NotAdvertised", Array.Empty<string>(), "No enabled declaration in Deviceinfo.xml."));
+                continue;
+            }
+
+            // The Deviceinfo file advertises the command names, but does not
+            // reliably specify which AppCommand wire envelope each needs.
+            // Probe both read-only encodings, without guessing writable commands.
+            foreach (var detailed in new[] { false, true })
+            {
+                var endpoint = detailed ? DenonEndpoints.AppCommand0300 : DenonEndpoints.AppCommand;
+                var candidatePort = detailed ? AppCommand0300Port ?? AppCommandPort ?? port
+                                             : AppCommandPort ?? port;
+                var request = detailed ? DenonAppCommand.CreateDetailedRequest(command)
+                                       : DenonAppCommand.CreateRequest(command);
+                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                {
+                    timeout.CancelAfter(TimeSpan.FromSeconds(3));
+                    try
+                    {
+                        var response = await _httpTransport.PostXmlAsync(Host, candidatePort,
+                            endpoint, request, timeout.Token).ConfigureAwait(false);
+                        probes.Add(DenonReadCommandInspector.Inspect(command, endpoint,
+                            candidatePort, response));
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception exception) when (exception is HttpRequestException ||
+                        exception is OperationCanceledException || exception is InvalidDataException ||
+                        exception is System.Xml.XmlException || exception is IOException)
+                    {
+                        probes.Add(new DenonReadCommandProbe(command, endpoint, candidatePort,
+                            "Error", Array.Empty<string>(), exception is OperationCanceledException
+                                ? "Probe timed out" : exception.GetType().Name));
+                    }
+                }
+            }
+        }
+        return probes;
     }
 
     /// <summary>Reads the active speaker-preset levels using the selected receiver profile.</summary>

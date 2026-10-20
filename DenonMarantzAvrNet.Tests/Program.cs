@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using DenonMarantzAvrNet.Transport;
 using DenonMarantzAvrNet.Models;
 using DenonMarantzAvrNet.Profiles;
+using DenonMarantzAvrNet.Discovery;
 
 namespace DenonMarantzAvrNet.Tests;
 
@@ -39,7 +40,10 @@ internal static class Program
             TestLegacyEndpointProbeIsReadOnly();
             TestNativeSpeakerMatrixParsing();
             TestNativeSpeakerMatrixHttpPort80();
-            Console.WriteLine("Discovery/transport: 15 tests passed.");
+            TestDynamicDeviceCapabilities();
+            TestReadCommandClassification();
+            TestReadOnlyCapabilityHttpProbes();
+            Console.WriteLine("Discovery/transport: 18 tests passed.");
             return 0;
         }
         catch (Exception exception)
@@ -464,6 +468,142 @@ internal static class Program
             {
                 Content = new StringContent(xml)
             });
+        }
+    }
+
+    private const string CapabilityFixture =
+        "<Device_Info><ModelName>*AVR-X4100W</ModelName><MacAddress>PRIVATE</MacAddress>" +
+        "<DeviceCapabilities><Setup><ChannelLevel><ChLists>" +
+        "<Ch><Name>FL</Name><DispName>Front L</DispName><MinRange>0</MinRange>" +
+        "<MaxRange>48</MaxRange><DefaultValue>24</DefaultValue><Step>0.5</Step></Ch>" +
+        "<Ch><Name>TML</Name><DispName>Top Middle L</DispName><MinRange>0</MinRange>" +
+        "<MaxRange>48</MaxRange><DefaultValue>24</DefaultValue><Step>0.5</Step></Ch>" +
+        "<Ch><Name>ZRL</Name><DispName>Reest</DispName><MinRange>24</MinRange>" +
+        "<MaxRange>24</MaxRange><DefaultValue>24</DefaultValue><Step>24</Step></Ch>" +
+        "</ChLists><Functions><GetChLevel>1</GetChLevel><SetChLevel>1</SetChLevel></Functions>" +
+        "</ChannelLevel><SoundMode><Commands><GetSoundModeList ver='1'>1</GetSoundModeList>" +
+        "<SetSoundModeList ver='1'>0</SetSoundModeList></Commands>" +
+        "<Genre><List><Value><DispName>MOVIE</DispName><CmdNo>MUSIC</CmdNo>" +
+        "</Value></List></Genre></SoundMode></Setup></DeviceCapabilities>" +
+        "<DeviceZoneCapabilities><Zone><No>0</No></Zone>" +
+        "<Volume><MaxValue>98.0</MaxValue><StepValue>0.5</StepValue></Volume>" +
+        "<Operation><QuickSelect><MaxQuickSelect>4</MaxQuickSelect></QuickSelect>" +
+        "<TunerOperation><MaxPresets>56</MaxPresets></TunerOperation></Operation>" +
+        "<SurroundMode><List><Mode><GroupName>Direct/Stereo</GroupName><Name>Stereo</Name>" +
+        "</Mode><Mode><GroupName>DSP Simulation</GroupName><Name>Rock Arena</Name>" +
+        "</Mode></List></SurroundMode></DeviceZoneCapabilities></Device_Info>";
+
+    private static void TestDynamicDeviceCapabilities()
+    {
+        var catalog = DenonDeviceCapabilityReader.Parse(CapabilityFixture, 80);
+        Check(catalog.IsCommandAdvertised("GetChLevel") &&
+            catalog.IsCommandAdvertised("GetSoundModeList"),
+            "Declared read functions must be discovered without a receiver profile.");
+        Check(!catalog.IsCommandAdvertised("SetSoundModeList") &&
+            catalog.Commands.Any(c => c.Name == "SetSoundModeList" && !c.Advertised),
+            "Disabled functions must be retained, but not marked as supported.");
+        Check(catalog.Channels.Count == 3 && catalog.Channels[1].NativeCode == "TML" &&
+            catalog.Channels[0].Step == .5 && catalog.Channels[2].MayBePlaceholder,
+            "Dynamic speaker definitions must retain raw ranges and odd placeholders.");
+        Check(catalog.SoundModes.Count == 2 && catalog.SoundModes[1].Name == "Rock Arena" &&
+            catalog.SoundModes.All(m => m.Name != "MUSIC"),
+            "Grouped Main Zone catalog must not be confused with malformed Genre list.");
+        Check(catalog.MaximumVolume == 98 && catalog.VolumeStep == .5 &&
+              catalog.QuickSelectCount == 4 && catalog.TunerPresetCount == 56,
+            "Device-reported limits must be preferred over hardcoded model assumptions.");
+        Check(!catalog.ToString()!.Contains("PRIVATE") &&
+            !string.Join(";", catalog.Commands.Select(c => c.Context)).Contains("PRIVATE"),
+            "Capability objects and API output must not copy device identity fields.");
+        try
+        {
+            DenonDeviceCapabilityReader.Parse(
+                "<!DOCTYPE a [<!ENTITY leak SYSTEM 'file:///C:/secret.txt'>]>" +
+                "<Device_Info>&leak;</Device_Info>", 80);
+            throw new Exception("External entities must be prohibited.");
+        }
+        catch (System.Xml.XmlException) { }
+    }
+
+    private static void TestReadCommandClassification()
+    {
+        const string endpoint = "/goform/AppCommand0300.xml";
+        var received = DenonReadCommandInspector.Inspect("GetChLevel", endpoint, 80,
+            "<rx><cmd><name>GetChLevel</name><list>" +
+            "<param name='chfl'>24</param></list></cmd></rx>");
+        Check(received.Status == "Received" &&
+            received.ResponseFields.Any(x => x.Contains("chfl")) &&
+            !received.ResponseFields.Any(x => x.Contains("24")),
+            "Probe must preserve XML parameter identity but exclude raw response values.");
+        Check(DenonReadCommandInspector.Inspect("GetChLevel", endpoint, 80,
+            "<rx><cmd><name>GetChLevel</name></cmd></rx>").Status == "Empty",
+            "Echo-only command responses must not count as verified results.");
+        Check(DenonReadCommandInspector.Inspect("GetSoundModeList", endpoint, 80,
+            "<rx><error>unsupported</error></rx>").Status == "Rejected",
+            "Explicit error replies must not count as verified data.");
+    }
+
+    private static void TestReadOnlyCapabilityHttpProbes()
+    {
+        var handler = new FakeCapabilityHandler();
+        using (var transport = new DenonHttpTransport(handler, TimeSpan.FromSeconds(3)))
+        using (var receiver = new DenonAvrClient("receiver.example", transport))
+        {
+            receiver.InitializeAsync().GetAwaiter().GetResult();
+            Check(receiver.DeviceCapabilities != null &&
+                  receiver.DeviceCapabilities.Channels.Count == 3,
+                  "Initialize must populate an advertised catalog from Deviceinfo response.");
+            var results = receiver.ProbeAdvertisedReadCommandsAsync().GetAwaiter().GetResult();
+            Check(results.Count == 4 &&
+                results.Count(p => p.Status == "Received") == 1 &&
+                results.Any(p => p.Command == "GetSoundModeList" && p.Status == "Rejected"),
+                "Only independently confirmed reply shapes may report Received.");
+            Check(handler.Bodies.Count == 4 &&
+                handler.Bodies.All(body => body.Contains("GetChLevel") ||
+                    body.Contains("GetSoundModeList")) &&
+                handler.Bodies.All(body => !body.Contains("<name>Set") &&
+                    !body.Contains(">Set")),
+                "Probe must never send a write command.");
+            var refreshed = receiver.RefreshDeviceCapabilitiesAsync().GetAwaiter().GetResult();
+            Check(refreshed.QuickSelectCount == 4 && handler.DeviceGets >= 2,
+                "Explicit refresh must refetch Deviceinfo without changing receiver state.");
+        }
+    }
+
+    private sealed class FakeCapabilityHandler : HttpMessageHandler
+    {
+        internal int DeviceGets { get; private set; }
+        internal List<string> Bodies { get; } = new List<string>();
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            string data;
+            if (path == "/goform/Deviceinfo.xml")
+            {
+                DeviceGets++;
+                data = CapabilityFixture;
+            }
+            else if (path == "/goform/AppCommand.xml" ||
+                     path == "/goform/AppCommand0300.xml")
+            {
+                var body = await request.Content!.ReadAsStringAsync();
+                if (body.Contains("GetAllZonePowerStatus"))
+                    data = "<rx><cmd><zone1>ON</zone1></cmd></rx>";
+                else
+                {
+                    Bodies.Add(body);
+                    if (body.Contains("GetChLevel") && path.EndsWith("0300.xml"))
+                        data = "<rx><cmd><name>GetChLevel</name><list>" +
+                            "<param name='chfl'>24</param></list></cmd></rx>";
+                    else if (body.Contains("GetSoundModeList"))
+                        data = "<rx><error>unsupported</error></rx>";
+                    else data = "<rx><cmd><name>GetChLevel</name></cmd></rx>";
+                }
+            }
+            else data = "<rx/>";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent(data) };
         }
     }
 

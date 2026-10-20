@@ -1,4 +1,4 @@
-using DenonMarantzAvrNet;
+﻿using DenonMarantzAvrNet;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -20,6 +20,9 @@ namespace DenonMarantzAvrNet.TesterGui
 
             RequireNullableIntGetter(clientType, "AppCommandPort", missing);
             RequireNullableIntGetter(clientType, "AppCommand0300Port", missing);
+            if (clientType.GetMethod("RefreshDeviceCapabilitiesAsync") == null ||
+                clientType.GetMethod("ProbeAdvertisedReadCommandsAsync") == null)
+                missing.Add("Device capability discovery API");
 
             if (missing.Count == 0)
                 return null;

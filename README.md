@@ -1,4 +1,4 @@
-# DenonMarantzAvrNet
+﻿# DenonMarantzAvrNet
 
 `DenonMarantzAvrNet` is an asynchronous C# library for controlling compatible Denon and Marantz AV receivers through their local HTTP/XML and Telnet interfaces. The repository also contains a WPF tester application for trying out the library against a real receiver.
 
@@ -7,6 +7,7 @@ The library was developed primarily with a **Denon AVC-X6800H** and its `0301` c
 ## Features
 
 - Automatic `Deviceinfo.xml` discovery on HTTP port `80` or `8080`; **independent** read-only `AppCommand.xml`/`AppCommand0300.xml` capability probes on both candidate ports
+- Dynamic `Deviceinfo.xml` capability catalog (`DeviceCapabilities`, native channel definitions, grouped sound-mode catalog, numeric limits and advertised read/write functions); optional **read-only** `GetChLevel`/`GetSoundModeList` wire-format diagnostics. Details: [Dynamic capabilities](docs/DYNAMIC-CAPABILITIES.md).
 - Reads the model, API version, number of zones, MAC address, and device category
 - Receiver profiles selected from the reported model (`avc-x6800h`, `avc-x6700h`, `legacy-goform`, `unknown`), with a manual override for similar models (compatibility mode)
 - Main Zone status:

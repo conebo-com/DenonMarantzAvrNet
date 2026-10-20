@@ -1,4 +1,4 @@
-# Legacy HTTP / AVR-X4100W — read-only research
+﻿# Legacy HTTP / AVR-X4100W — read-only research
 
 ## Motivation
 
@@ -93,3 +93,12 @@ Relevant references:
 - https://manuals.denon.com/AVRX4100W/EU/EN/GFNFSYwwqdpazi.php
 - https://manuals.denon.com/avrx4100w/eu/en/GFNFSYgntxjrhm.php
 - https://github.com/Perkka2/DenonRemote (third-party claims about dynamic setup)
+
+## Next step: dynamic capability catalog
+
+The full anonymized X4100W `Deviceinfo.xml` proved that speaker channel
+**definitions** (including level range metadata) and a Main Zone sound mode
+**catalog** can be read without a dedicated X4100W profile. See
+[DYNAMIC-CAPABILITIES.md](DYNAMIC-CAPABILITIES.md) for the new discovery API,
+experimental read-only command probes and explicit evidence boundaries. The
+older saved calibration level/distance endpoints remain unresolved.

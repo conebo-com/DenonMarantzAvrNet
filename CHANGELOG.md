@@ -1,6 +1,15 @@
-# Changelog
+﻿# Changelog
 
 ## Unreleased (2026-10-20)
+
+### Dynamic DeviceInfo capabilities (2026-10-20)
+
+- Add model-independent, read-only `DenonDeviceCapabilityDiscovery` with advertised command flags, 29 possible channel-type definitions on the sample X4100W, grouped Main Zone sound mode catalog and dynamic numeric limits.
+- Parse and retain unusual fixed-range entries instead of assuming all channel definitions are connected/configured speakers.
+- Probe advertised `GetChLevel`/`GetSoundModeList` with separate `AppCommand.xml` and experimental `AppCommand0300.xml` read-only envelopes; never call Set methods.
+- Distinguish advertised, returned, empty, rejected and transport-error evidence; do not claim dynamic Audyssey calibration access.
+- Extend anonymized WPF report with new operations, add three offline tests, and document protocol limitations in `docs/DYNAMIC-CAPABILITIES.md`.
+
 
 - Exclude the project library from Costura embedding; ship the current DLL next to the WPF executable.
 - Validate `AppCommandPort`/`AppCommand0300Port` public getters on WPF startup and report the actual loaded DLL path if the API is incompatible.

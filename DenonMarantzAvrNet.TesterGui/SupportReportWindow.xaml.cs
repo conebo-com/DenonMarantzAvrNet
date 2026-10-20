@@ -1,4 +1,4 @@
-using DenonMarantzAvrNet;
+﻿using DenonMarantzAvrNet;
 using DenonMarantzAvrNet.Exceptions;
 using DenonMarantzAvrNet.Models;
 using System.Collections.ObjectModel;
@@ -193,6 +193,8 @@ namespace DenonMarantzAvrNet.TesterGui
             new("Speakers (HTTP)", "Distances", ReadDistancesAsync),
             new("Speakers (HTTP)", "Configured speakers", ReadConfiguredSpeakersAsync),
             new("Receiver", "Legacy HTTP discovery (read only)", ReadLegacyHttpDiscoveryAsync),
+            new("Receiver", "Device capabilities (dynamic, read only)", ReadDeviceCapabilitiesAsync),
+            new("Receiver", "Advertised read commands (experimental)", ReadAdvertisedReadCommandsAsync),
             new("Speakers (HTTP)", "Native speaker matrix (read only)", ReadSpeakerMatrixAsync),
             new("Telnet", "CV? raw diagnostic", ReadRawChannelLevelsAsync),
             new("Telnet", "Channel levels", ReadChannelLevelsAsync),
@@ -403,6 +405,70 @@ namespace DenonMarantzAvrNet.TesterGui
                 ? Ok(builder.ToString().TrimEnd())
                 : Warning(builder.ToString().TrimEnd());
         }
+
+        private async Task<OperationResult> ReadDeviceCapabilitiesAsync(CancellationToken cancellationToken)
+        {
+            var catalog = await _client.RefreshDeviceCapabilitiesAsync(cancellationToken);
+            var builder = new StringBuilder();
+            builder.AppendLine($"Deviceinfo port: {catalog.HttpPort}");
+            builder.AppendLine($"Advertised command declarations: {catalog.Commands.Count}");
+            builder.AppendLine($"Enabled: {catalog.Commands.Count(c => c.Advertised)}");
+            builder.AppendLine($"Possible channel types: {catalog.Channels.Count} (not configured speakers)");
+            builder.AppendLine($"Sound mode catalog: {catalog.SoundModes.Count} (not signal-dependent)");
+            builder.AppendLine($"Max volume: {catalog.MaximumVolume?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}");
+            builder.AppendLine($"Volume step: {catalog.VolumeStep?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}");
+            builder.AppendLine($"Quick Select slots: {catalog.QuickSelectCount?.ToString() ?? "unknown"}");
+            builder.AppendLine($"Tuner presets: {catalog.TunerPresetCount?.ToString() ?? "unknown"}");
+            builder.AppendLine("READ COMMAND CLAIMS:");
+            foreach (var name in new[] { "GetChLevel", "GetSoundModeList", "GetSoundMode" })
+                builder.AppendLine($"  {name}: {(catalog.IsCommandAdvertised(name) ? "advertised" : "not advertised")}");
+
+            builder.AppendLine("CHANNEL TYPES (source: Deviceinfo.xml):");
+            foreach (var ch in catalog.Channels)
+            {
+                // Do not print arbitrary receiver-configured user text into support reports.
+                if (SafeCatalogText(ch.NativeCode) == "(unrecognized entry)") continue;
+                builder.AppendLine($"  {ch.NativeCode,-5} min={FormatCapabilityNumber(ch.Minimum),-6} " +
+                    $"max={FormatCapabilityNumber(ch.Maximum),-6} " +
+                    $"default={FormatCapabilityNumber(ch.DefaultValue),-6} " +
+                    $"step={FormatCapabilityNumber(ch.Step)}" +
+                    (ch.MayBePlaceholder ? " [fixed-range / possible placeholder]" : ""));
+            }
+            builder.AppendLine("MAIN-ZONE SOUND MODE CATALOG (not current availability):");
+            foreach (var mode in catalog.SoundModes)
+            {
+                // Catalog entries may be firmware strings. Constrain to safe characters.
+                var group = SafeCatalogText(mode.Group);
+                var name = SafeCatalogText(mode.Name);
+                builder.AppendLine($"  {group}: {name}");
+            }
+            builder.AppendLine("Declared commands are not verified read/write support.");
+            return Ok(builder.ToString().TrimEnd());
+        }
+
+        private async Task<OperationResult> ReadAdvertisedReadCommandsAsync(CancellationToken cancellationToken)
+        {
+            var results = await _client.ProbeAdvertisedReadCommandsAsync(cancellationToken);
+            var builder = new StringBuilder();
+            foreach (var result in results)
+            {
+                builder.AppendLine($"{result.Command} @ {result.Endpoint}:{result.HttpPort} = {result.Status}");
+                foreach (var field in result.ResponseFields.Take(40))
+                    builder.AppendLine($"  XML: {field}");
+                if (!string.IsNullOrEmpty(result.Note)) builder.AppendLine($"  Note: {result.Note}");
+            }
+            builder.AppendLine("Only read queries were issued. XML VALUES were deliberately excluded.");
+            return results.Any(r => r.Status == "Received")
+                ? Ok(builder.ToString().TrimEnd()) : Warning(builder.ToString().TrimEnd());
+        }
+
+        private static string FormatCapabilityNumber(double? value) =>
+            value?.ToString("0.###", CultureInfo.InvariantCulture) ?? "?";
+
+        private static string SafeCatalogText(string value) =>
+            value.Length <= 64 && value.All(c => char.IsLetterOrDigit(c) ||
+                c == ' ' || c == '-' || c == '/' || c == '+' || c == '.' || c == '&')
+                ? value : "(unrecognized entry)";
 
         private async Task<OperationResult> ReadSpeakerMatrixAsync(CancellationToken cancellationToken)
         {
