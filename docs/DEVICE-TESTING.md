@@ -53,7 +53,7 @@ For an X6800H, verify `ReceiverProfileId == "avc-x6800h"`; for an X6700H, verify
 
 The X6800H speaker setup uses HTTP/11080. The X6700H uses HTTPS/10443; the library accepts the receiver's local device certificate only for this explicitly profiled speaker-setup transport. A TLS error here indicates that the receiver-specific HTTPS path or certificate handling is not active.
 
-Programmatic distance tests can use `GetSpeakerDistancesAsync()` and `SetSpeakerDistanceAsync()`. Read values are always returned in meters. On the captured X6700H interface, raw values are meters × 100 (`476` = `4.76 m`); after a write, reread the value and restore the original distance.
+Programmatic distance tests can use `GetSpeakerDistancesAsync()` and `SetSpeakerDistanceAsync()`. Read values are always returned in meters. Do not infer meters from raw values without checking `<Unit>`: `1` is feet and `2` is meters in the currently documented AJAX interface. Compare with the receiver UI and validate after writing.
 
 `GetConfiguredSpeakersAsync()` must return the persistent physical speaker setup even when the current input signal does not activate all channels. Do not compare its count directly with `state.Audio.ActiveSpeakerChannels`: those channels describe current playback activity, not speaker configuration.
 

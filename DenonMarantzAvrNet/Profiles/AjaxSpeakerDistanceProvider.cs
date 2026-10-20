@@ -34,8 +34,8 @@ internal sealed class AjaxSpeakerDistanceProvider(
 
         var unit = unitValue switch
         {
-            1 => DenonSpeakerDistanceUnit.Meters,
-            2 => DenonSpeakerDistanceUnit.Feet,
+            1 => DenonSpeakerDistanceUnit.Feet,
+            2 => DenonSpeakerDistanceUnit.Meters,
             _ => throw new InvalidDataException(
                 $"Unbekannte Denon-Distanzeinheit: {unitValue}.")
         };
@@ -59,13 +59,13 @@ internal sealed class AjaxSpeakerDistanceProvider(
                 item.RawValue is not null)
             .Select(item => new DenonSpeakerDistance(
                 item.Index!.Value,
-                RawToMeters(item.RawValue!.Value)))
+                RawToMeters(item.RawValue!.Value, unit)))
             .OrderBy(distance => distance.SpeakerIndex)
             .ToArray();
 
         return new DenonSpeakerDistanceConfiguration(
             unit,
-            RawToMeters(rawStep),
+            RawToMeters(rawStep, unit),
             ratio,
             speakers);
         // <-----------
@@ -77,13 +77,18 @@ internal sealed class AjaxSpeakerDistanceProvider(
         double meters,
         CancellationToken cancellationToken)
     {
-        // The receiver reports raw values as meters x 100 in both unit modes. The read is kept
-        // so the response is still validated before writing.
-        _ = await GetDistancesAsync(
+        // The wire payload is 1/100 of the displayed receiver unit, not always meters.
+        // Read the currently selected unit immediately before every write.
+        var current = await GetDistancesAsync(
             context,
             cancellationToken).ConfigureAwait(false);
+        if (double.IsNaN(meters) || double.IsInfinity(meters) || meters <= 0 || meters > 18.0)
+            throw new ArgumentOutOfRangeException(nameof(meters),
+                "Speaker distance must be > 0 m and <= 18 m.");
+        if (!current.Speakers.Any(s => s.SpeakerIndex == speakerIndex))
+            throw new InvalidDataException("Speaker index not present in current distance configuration.");
 
-        var rawValue = MetersToRaw(meters);
+        var rawValue = MetersToRaw(meters, current.ReceiverUnit);
 
         _ = await context.HttpTransport.GetStringAsync(
             context.Host,
@@ -96,12 +101,14 @@ internal sealed class AjaxSpeakerDistanceProvider(
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static double RawToMeters(int rawValue) =>
-        rawValue / 100.0;
+    // Denon's AJAX 'Unit' selection uses 1 = feet, 2 = meters.
+    // Raw numbers are hundredths of the SELECTED unit.
+    internal static double RawToMeters(int rawValue, DenonSpeakerDistanceUnit unit) =>
+        rawValue / 100.0 * (unit == DenonSpeakerDistanceUnit.Feet ? 0.3048 : 1.0);
 
-    private static int MetersToRaw(double meters) =>
+    internal static int MetersToRaw(double meters, DenonSpeakerDistanceUnit unit) =>
         (int)Math.Round(
-            meters * 100.0,
+            meters / (unit == DenonSpeakerDistanceUnit.Feet ? 0.3048 : 1.0) * 100.0,
             MidpointRounding.AwayFromZero);
 
     private static int ParseRequiredInt(

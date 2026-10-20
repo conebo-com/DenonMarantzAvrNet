@@ -43,7 +43,11 @@ internal static class Program
             TestDynamicDeviceCapabilities();
             TestReadCommandClassification();
             TestReadOnlyCapabilityHttpProbes();
-            Console.WriteLine("Discovery/transport: 18 tests passed.");
+            TestChannelAdjustmentsAreNotCalibration();
+            TestSoundFamiliesFromMainZoneShortcuts();
+            TestOpsmlallParser();
+            TestDistanceUnitConversion();
+            Console.WriteLine("Discovery/transport: 22 tests passed.");
             return 0;
         }
         catch (Exception exception)
@@ -51,6 +55,74 @@ internal static class Program
             Console.Error.WriteLine(exception);
             return 1;
         }
+    }
+
+    private static void TestChannelAdjustmentsAreNotCalibration()
+    {
+        const string xml = "<rx><cmd><status>1</status><chlists>" +
+            "<ch><name>FL</name><status>1</status><sptype>1</sptype><level>24</level><value>0</value></ch>" +
+            "<ch><name>TML</name><status>0</status><level>25</level><value>1</value></ch>" +
+            "</chlists></cmd></rx>";
+        var values = DenonChannelLevelAdjustmentReader.Parse(xml);
+        Check(values.Count == 2 && values[0].Channel == "FL" &&
+            values[0].LevelRaw == "24" && values[1].ValueRaw == "1",
+            "GetChLevel must preserve raw per-input fields and must not infer calibration dB.");
+        try
+        {
+            DenonChannelLevelAdjustmentReader.Parse("<rx><error>Unsupported</error></rx>");
+            throw new Exception("Unusable command must not pass as successful calibration.");
+        }
+        catch (InvalidDataException) { }
+    }
+
+    private static void TestSoundFamiliesFromMainZoneShortcuts()
+    {
+        const string xml = "<Device_Info><DeviceZoneCapabilities><Zone><No>0</No></Zone>" +
+            "<ShortcutControl><EntryList>" +
+            "<Shortcut><Category>5</Category><FuncName>MOVIE</FuncName></Shortcut>" +
+            "<Shortcut><Category>5</Category><FuncName>MUSIC</FuncName></Shortcut>" +
+            "<Shortcut><Category>5</Category><FuncName>GAME</FuncName></Shortcut>" +
+            "<Shortcut><Category>5</Category><FuncName>PURE</FuncName></Shortcut>" +
+            "<Shortcut><Category>4</Category><FuncName>GAME</FuncName></Shortcut>" +
+            "</EntryList></ShortcutControl></DeviceZoneCapabilities></Device_Info>";
+        var catalog = DenonDeviceCapabilityReader.Parse(xml, 80);
+        Check(catalog.SoundModeFamilies.Count == 4 &&
+            catalog.SoundModeFamilies.SequenceEqual(new[] { "MOVIE", "MUSIC", "GAME", "PURE" }),
+            "Remote sound families should be read from main zone, not confused with GAME input.");
+    }
+
+    private static void TestOpsmlallParser()
+    {
+        var list = DenonSoundModeListReader.Parse(new[] {
+            "OPSMLALL MOV011Stereo",
+            "OPSMLALL MUS020Dolby Audio - Dolby Surround",
+            "OPSMLALL PUR031Pure Direct",
+            "OPSMLALL END"
+        });
+        Check(list.Count == 3 && list[0].FamilyCode == "MOV" && list[0].IsActive &&
+            !list[1].IsActive && list[2].DisplayName == "Pure Direct",
+            "OPSMLALL must retain category, active status and raw label without inventing set commands.");
+        Check(DenonTelnetResponseMatcher.IsResponse("OPSMLALL?", "OPSMLALL PUR031Pure Direct") &&
+            DenonTelnetResponseMatcher.IsResponse("MSMOVIE", "MSSTEREO"),
+            "Query/selection replies must be matched by their command family.");
+        try
+        {
+            DenonSoundModeListReader.Parse(new[] { "OPSMLALL MOV011Stereo" });
+            throw new Exception("Incomplete OPSMLALL must not be treated as a supported full list.");
+        }
+        catch (InvalidDataException) { }
+    }
+
+    private static void TestDistanceUnitConversion()
+    {
+        var feet = AjaxSpeakerDistanceProvider.RawToMeters(971, DenonSpeakerDistanceUnit.Feet);
+        Check(Math.Abs(feet - 2.959608) < 0.00001,
+            "Unit=1 must be feet, not meters; this is critical for safe distance writes.");
+        Check(Math.Abs(AjaxSpeakerDistanceProvider.RawToMeters(296, DenonSpeakerDistanceUnit.Meters) - 2.96) < .00001,
+            "Unit=2 must be meters.");
+        Check(AjaxSpeakerDistanceProvider.MetersToRaw(2.959608, DenonSpeakerDistanceUnit.Feet) == 971 &&
+            AjaxSpeakerDistanceProvider.MetersToRaw(2.96, DenonSpeakerDistanceUnit.Meters) == 296,
+            "Read/write distance scaling must round-trip in selected receiver units.");
     }
 
     private static void TestLevelIndicesAreNative()

@@ -196,6 +196,39 @@ public sealed class DenonTelnetClient
         return SendCommandAsync($"MS{protocolMode}", cancellationToken);
     }
 
+    /// <summary>
+    /// Selects a listening-mode family as on the receiver's MOVIE/MUSIC/GAME/PURE
+    /// remote buttons. The receiver decides which mode is applicable to the input.
+    /// No assumption is made that the command cycles or that all families are supported.
+    /// </summary>
+    public Task<string> SelectSoundModeFamilyAsync(
+        DenonSoundModeFamily family, CancellationToken cancellationToken = default)
+    {
+        string command;
+        switch (family)
+        {
+            case DenonSoundModeFamily.Movie: command = "MSMOVIE"; break;
+            case DenonSoundModeFamily.Music: command = "MSMUSIC"; break;
+            case DenonSoundModeFamily.Game: command = "MSGAME"; break;
+            case DenonSoundModeFamily.Direct: command = "MSDIRECT"; break;
+            case DenonSoundModeFamily.PureDirect: command = "MSPURE DIRECT"; break;
+            default: throw new ArgumentOutOfRangeException(nameof(family));
+        }
+        return SendCommandAsync(command, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the available grouped listening modes when the receiver supports
+    /// the optional OPSMLALL protocol. Unsupported receivers may time out.
+    /// </summary>
+    public async Task<IReadOnlyList<DenonSoundModeOption>> GetSoundModeOptionsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var lines = await SendCommandUntilAsync("OPSMLALL?", "OPSMLALL END", cancellationToken)
+            .ConfigureAwait(false);
+        return Discovery.DenonSoundModeListReader.Parse(lines);
+    }
+
     /// <summary>Sets the digital input decoder to <c>Auto</c>, <c>PCM</c> or <c>DTS</c>.</summary>
     public Task<string> SetDigitalInputModeAsync(string mode, CancellationToken cancellationToken = default)
     {

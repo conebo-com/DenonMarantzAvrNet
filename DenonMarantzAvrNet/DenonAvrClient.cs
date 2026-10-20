@@ -1003,6 +1003,45 @@ public sealed class DenonAvrClient : IDisposable
         return probes;
     }
 
+    /// <summary>
+    /// Reads the optional, per-input Channel Level Adjust menu through the legacy
+    /// AppCommand interface. These are NOT the Audyssey/manual speaker calibration levels.
+    /// The original receiver field values are returned without guessing their units.
+    /// </summary>
+    public async Task<IReadOnlyList<DenonChannelLevelAdjustment>> GetChannelLevelAdjustmentsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        var port = AppCommandPort ?? GetInitializedPort();
+        var response = await _httpTransport.PostXmlAsync(Host, port,
+            DenonEndpoints.AppCommand, DenonAppCommand.CreateRequest("GetChLevel"),
+            cancellationToken).ConfigureAwait(false);
+        return DenonChannelLevelAdjustmentReader.Parse(response);
+    }
+
+    /// <summary>
+    /// Selects Movie, Music, Game, Direct or Pure Direct via the receiver's
+    /// native Telnet sound-mode family commands. The command changes AVR state.
+    /// Deviceinfo advertisements are hints, not guaranteed runtime availability.
+    /// </summary>
+    public async Task<string> SelectSoundModeFamilyAsync(DenonSoundModeFamily family,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (ReceiverCapabilities?.SupportsTelnet == false)
+            throw new NotSupportedException("Telnet is not available for this receiver.");
+        return await _telnetClient.SelectSoundModeFamilyAsync(family, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads the optional native dynamic Movie/Music/Game/Pure list; a timeout
+    /// means that this protocol is not verified, not that the AVR has no modes.
+    /// </summary>
+    public Task<IReadOnlyList<DenonSoundModeOption>> GetSoundModeOptionsAsync(
+        CancellationToken cancellationToken = default) =>
+        _telnetClient.GetSoundModeOptionsAsync(cancellationToken);
+
     /// <summary>Reads the active speaker-preset levels using the selected receiver profile.</summary>
     public Task<IReadOnlyList<DenonSpeakerPresetLevel>> GetSpeakerPresetLevelsAsync(
         CancellationToken cancellationToken = default) =>

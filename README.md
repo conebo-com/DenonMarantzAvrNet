@@ -478,3 +478,7 @@ The returned `Slots` preserve the AVR's own `NativeId`, optional `Label`, and
 uninterpreted `ControlCode`. This is not a speaker calibration-level/distance
 API. The WPF compatibility test includes **Native speaker matrix (read only)**.
 See `docs/LEGACY_HTTP_RESEARCH.md` for limitations and safety conditions.
+
+## Sound mode families / level vs. calibration / distance unit fix
+
+See [docs/SOUNDMODES_LEVELS_DISTANCES.md](docs/SOUNDMODES_LEVELS_DISTANCES.md) for the new sound-mode family API, read-only source-specific level diagnostics, distance unit conversions and remaining legacy calibration limitations.

@@ -310,7 +310,7 @@ await receiver.SetSpeakerDistanceAsync(speakerIndex: 0, meters: 3.25);
 
 `GetSpeakerDistancesAsync()` reads `/ajax/speakers/get_config?type=4`. The public API always returns `DenonSpeakerDistance.Meters` and `DenonSpeakerDistanceConfiguration.Step` in meters. `ReceiverUnit` preserves the AVR's current UI unit metadata, and `M2FConvertRatio` exposes optional conversion metadata returned by the receiver.
 
-`SetSpeakerDistanceAsync()` accepts meters and writes the raw value through `set_config?type=4`. The captured X6700H responses show that raw distance values are meters × 100 independently of the UI display unit (`476` = `4.76 m`). A non-positive or non-finite distance is rejected. The X6800H and X6700H profiles support this API; legacy and unknown profiles still throw `NotSupportedException`.
+`SetSpeakerDistanceAsync()` accepts meters and writes the raw value through `set_config?type=4`. The AJAX raw payload is hundredths of the selected display unit (`Unit=1` feet; `Unit=2` meters). The conversion must be compared against the receiver UI before writing. A non-positive or non-finite distance is rejected. The X6800H and X6700H profiles support this API; legacy and unknown profiles still throw `NotSupportedException`.
 
 Only the test-tone stop request `<StopTestTone></StopTestTone>` has been observed so far. The library therefore does not yet implement start or stop commands until the corresponding start request has been recorded unambiguously.
 

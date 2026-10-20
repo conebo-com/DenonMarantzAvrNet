@@ -15,7 +15,8 @@ public sealed class DenonDeviceCapabilityDiscovery
         IReadOnlyList<DenonAdvertisedChannel> channels,
         IReadOnlyList<DenonAdvertisedSoundMode> soundModes,
         double? maximumVolume, double? volumeStep,
-        int? quickSelectCount, int? tunerPresetCount)
+        int? quickSelectCount, int? tunerPresetCount,
+        IReadOnlyList<string>? soundModeFamilies = null)
     {
         CapturedUtc = capturedUtc;
         HttpPort = httpPort;
@@ -26,6 +27,7 @@ public sealed class DenonDeviceCapabilityDiscovery
         VolumeStep = volumeStep;
         QuickSelectCount = quickSelectCount;
         TunerPresetCount = tunerPresetCount;
+        SoundModeFamilies = soundModeFamilies ?? Array.Empty<string>();
     }
 
     public DateTimeOffset CapturedUtc { get; }
@@ -40,6 +42,8 @@ public sealed class DenonDeviceCapabilityDiscovery
     public double? VolumeStep { get; }
     public int? QuickSelectCount { get; }
     public int? TunerPresetCount { get; }
+    /// <summary>Native Main Zone group shortcuts (e.g. MOVIE, MUSIC, GAME, PURE).</summary>
+    public IReadOnlyList<string> SoundModeFamilies { get; }
 
     public bool IsCommandAdvertised(string name) =>
         System.Linq.Enumerable.Any(Commands, c => c.Advertised &&

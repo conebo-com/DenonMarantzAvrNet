@@ -468,6 +468,19 @@ namespace DenonMarantzAvrNet.TesterGui
                 new(audioGroup, Loc.Get("Surround mode"), false,
                     [new(Loc.Get("Mode (Auto, Stereo, Dolby Surround, DTS Neural:X, Multi Ch Stereo, Pure Direct)"), "Auto")],
                     input => TelnetResponseAsync(Telnet.SetSurroundModeAsync(input.Parameter1, Token))),
+                new(audioGroup, "Available sound modes (OPSMLALL, read-only)", false,
+                    [], async _ =>
+                    {
+                        var list = await Client.GetSoundModeOptionsAsync(Token);
+                        return list.Count == 0 ? "No OPSMLALL modes reported." :
+                            string.Join(Environment.NewLine, list.Select(mode =>
+                                $"{mode.FamilyCode} {mode.NativeId} {mode.DisplayName}"));
+                    }),
+                new(audioGroup, "Sound mode family (Movie/Music/Game/Direct/PureDirect)", false,
+                    [new("Family (Movie, Music, Game, Direct, PureDirect)", "Movie")],
+                    input => TelnetResponseAsync(Client.SelectSoundModeFamilyAsync(
+                        (DenonSoundModeFamily)Enum.Parse(typeof(DenonSoundModeFamily),
+                            input.Parameter1.Trim(), ignoreCase: true), Token))),
                 new(audioGroup, Loc.Get("Digital input decoder"), false, [new(Loc.Get("Mode (Auto, PCM, DTS)"), "Auto")],
                     input => TelnetResponseAsync(Telnet.SetDigitalInputModeAsync(input.Parameter1, Token))),
                 new(audioGroup, Loc.Get("Raw Telnet command"), false, [new(Loc.Get("Command (e.g. PW?, MV?, SI?)"), "PW?")],

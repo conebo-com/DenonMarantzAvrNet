@@ -1,3 +1,11 @@
+## Unreleased - priority sound / speaker diagnostics
+
+- feat: native Movie/Music/Game/Direct/PureDirect family selection via Telnet and optional read-only OPSMLALL mode lists.
+- feat: read-only `GetChLevel` per-input adjustment parser; separate from calibration speaker setup.
+- fix: normalize Denon AJAX speaker distance units (`Unit=1` feet, `Unit=2` meters) and validate converted writes.
+- test: extra regression checks for capabilities, raw channel adjustments, OPSMLALL and distance scaling.
+- docs: document the remaining unverified AVR-X4100W persistent calibration level/distance endpoints.
+
 ﻿# Changelog
 
 ## Unreleased (2026-10-20)

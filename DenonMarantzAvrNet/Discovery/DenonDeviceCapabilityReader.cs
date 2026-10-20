@@ -62,13 +62,23 @@ internal static class DenonDeviceCapabilityReader
             .Where(mode => mode.Name.Length > 0)
             .Take(128).ToArray();
 
+        var shortcuts = Child(Child(mainZone, "ShortcutControl"), "EntryList");
+        // Category 5 identifies sound-mode shortcuts, but direct modes and
+        // individual codecs also occur there. Keep only the four family keys.
+        var families = (shortcuts == null ? Enumerable.Empty<XElement>() :
+            shortcuts.Elements().Where(e => Is(e, "Shortcut")))
+            .Where(e => Text(e, "Category") == "5")
+            .Select(e => Text(e, "FuncName") ?? "")
+            .Where(n => n == "MOVIE" || n == "MUSIC" || n == "GAME" || n == "PURE")
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
         var volume = Child(mainZone, "Volume");
         var quick = Child(Child(mainZone, "Operation"), "QuickSelect");
         var tuner = Child(Child(mainZone, "Operation"), "TunerOperation");
         return new DenonDeviceCapabilityDiscovery(DateTimeOffset.UtcNow, port,
             advertised.ToArray(), channels, soundModes,
             Number(volume, "MaxValue"), Number(volume, "StepValue"),
-            Integer(quick, "MaxQuickSelect"), Integer(tuner, "MaxPresets"));
+            Integer(quick, "MaxQuickSelect"), Integer(tuner, "MaxPresets"), families);
     }
 
     internal static XDocument SecureXml(string xml)

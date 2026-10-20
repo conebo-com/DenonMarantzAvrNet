@@ -195,6 +195,9 @@ namespace DenonMarantzAvrNet.TesterGui
             new("Receiver", "Legacy HTTP discovery (read only)", ReadLegacyHttpDiscoveryAsync),
             new("Receiver", "Device capabilities (dynamic, read only)", ReadDeviceCapabilitiesAsync),
             new("Receiver", "Advertised read commands (experimental)", ReadAdvertisedReadCommandsAsync),
+            new("Speakers (HTTP)", "Channel Level Adjust (per-input, NOT calibration)", ReadChannelAdjustmentsAsync),
+            new("Receiver", "Sound mode families (advertised, read only)", ReadSoundFamiliesAsync),
+            new("Telnet", "OPSMLALL grouped sound modes (optional read only)", ReadSoundModeOptionsAsync),
             new("Speakers (HTTP)", "Native speaker matrix (read only)", ReadSpeakerMatrixAsync),
             new("Telnet", "CV? raw diagnostic", ReadRawChannelLevelsAsync),
             new("Telnet", "Channel levels", ReadChannelLevelsAsync),
@@ -382,6 +385,65 @@ namespace DenonMarantzAvrNet.TesterGui
 
             return Ok(builder.ToString().TrimEnd());
             // <-----------
+        }
+
+        private async Task<OperationResult> ReadChannelAdjustmentsAsync(CancellationToken cancellationToken)
+        {
+            var adjustments = await _client.GetChannelLevelAdjustmentsAsync(cancellationToken);
+            if (adjustments.Count == 0)
+                return Warning("GetChLevel returned no channel values. This is NOT calibration.");
+            var builder = new StringBuilder();
+            builder.AppendLine("Per-input OPTION/Channel Level Adjust; NOT Audyssey calibration levels.");
+            builder.AppendLine("Name      Status   SpeakerType  LevelRaw  ValueRaw");
+            foreach (var ch in adjustments)
+                builder.AppendLine($"{SafeAdjustmentToken(ch.Channel),-9} " +
+                    $"{SafeAdjustmentToken(ch.Status),-8} " +
+                    $"{SafeAdjustmentToken(ch.SpeakerType),-12} " +
+                    $"{SafeAdjustmentToken(ch.LevelRaw),-9} " +
+                    $"{SafeAdjustmentToken(ch.ValueRaw)}");
+            return Ok(builder.ToString().TrimEnd());
+        }
+
+        private static string SafeAdjustmentToken(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return "-";
+            var trimmed = value.Trim();
+            return trimmed.Length <= 24 && trimmed.All(c =>
+                char.IsLetterOrDigit(c) || c == '+' || c == '-' ||
+                c == '.' || c == '_' || c == ':' || c == '%')
+                ? trimmed : "[hidden]";
+        }
+
+        private async Task<OperationResult> ReadSoundModeOptionsAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                var modes = await _client.GetSoundModeOptionsAsync(cancellationToken);
+                if (modes.Count == 0)
+                    return Warning("OPSMLALL completed but supplied no recognized sound modes.");
+                var builder = new StringBuilder();
+                foreach (var mode in modes)
+                    builder.AppendLine($"{mode.FamilyCode} {mode.NativeId} " +
+                        $"{(mode.IsActive ? "active" : "-")} {SafeCatalogText(mode.DisplayName)}");
+                return Ok(builder.ToString().TrimEnd());
+            }
+            catch (Exception exception) when (exception is IOException ||
+                exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+            {
+                return Warning("OPSMLALL not verified on this receiver: " + exception.GetType().Name);
+            }
+        }
+
+        private async Task<OperationResult> ReadSoundFamiliesAsync(CancellationToken cancellationToken)
+        {
+            var catalog = await _client.RefreshDeviceCapabilitiesAsync(cancellationToken);
+            var builder = new StringBuilder();
+            builder.AppendLine("Main-Zone sound mode family shortcuts from Deviceinfo.xml:");
+            foreach (var family in catalog.SoundModeFamilies)
+                builder.AppendLine("  " + SafeCatalogText(family));
+            builder.AppendLine("Advertised shortcut != verified mode selection; no commands sent.");
+            return catalog.SoundModeFamilies.Count == 0
+                ? Warning(builder.ToString().TrimEnd()) : Ok(builder.ToString().TrimEnd());
         }
 
         private async Task<OperationResult> ReadLegacyHttpDiscoveryAsync(CancellationToken cancellationToken)
