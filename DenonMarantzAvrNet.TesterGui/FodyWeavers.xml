@@ -1,3 +1,6 @@
-﻿<Weavers xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="FodyWeavers.xsd">
-  <Costura />
+<?xml version="1.0" encoding="utf-8"?>
+<Weavers xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="FodyWeavers.xsd">
+  <!-- Keep our rapidly changing public library as a visible, separately deployed DLL. -->
+  <!-- Third-party dependencies may still be embedded by Costura. -->
+  <Costura ExcludeAssemblies="DenonMarantzAvrNet" />
 </Weavers>

@@ -64,6 +64,11 @@ internal static class DenonReceiverProfileRegistry
             // <-----------
         }
 
+        if (string.Equals(profileId.Trim(), Legacy.Id, StringComparison.OrdinalIgnoreCase))
+            return Legacy;
+        if (string.Equals(profileId.Trim(), Unknown.Id, StringComparison.OrdinalIgnoreCase))
+            return Unknown;
+
         return null;
         // <-----------
     }
@@ -72,6 +77,7 @@ internal static class DenonReceiverProfileRegistry
 internal sealed class AvcX6800hProfile : IDenonReceiverProfile
 {
     public string Id => "avc-x6800h";
+    public DenonSpeakerAjaxOptions? SpeakerDiscoveryOptions => DenonSpeakerAjaxOptions.AvcX6800H;
     public int SpeakerPresetCount => 2;
     public bool SupportsSpeakerPresetLevels => true;
     public bool SupportsSpeakerDistances => true;
@@ -90,6 +96,7 @@ internal sealed class AvcX6800hProfile : IDenonReceiverProfile
 internal sealed class AvcX6700hProfile : IDenonReceiverProfile
 {
     public string Id => "avc-x6700h";
+    public DenonSpeakerAjaxOptions? SpeakerDiscoveryOptions => DenonSpeakerAjaxOptions.AvcX6700H;
     public int SpeakerPresetCount => 2;
     public bool SupportsSpeakerPresetLevels => true;
     public bool SupportsSpeakerDistances => true;
@@ -108,6 +115,7 @@ internal sealed class AvcX6700hProfile : IDenonReceiverProfile
 internal sealed class LegacyReceiverProfile : IDenonReceiverProfile
 {
     public string Id => "legacy-goform";
+    public DenonSpeakerAjaxOptions? SpeakerDiscoveryOptions => null;
     public int SpeakerPresetCount => 0;
     public bool SupportsSpeakerPresetLevels => false;
     public bool SupportsSpeakerDistances => false;
@@ -129,6 +137,7 @@ internal sealed class LegacyReceiverProfile : IDenonReceiverProfile
 internal sealed class UnknownReceiverProfile : IDenonReceiverProfile
 {
     public string Id => "unknown";
+    public DenonSpeakerAjaxOptions? SpeakerDiscoveryOptions => null;
     public int SpeakerPresetCount => 0;
     public bool SupportsSpeakerPresetLevels => false;
     public bool SupportsSpeakerDistances => false;

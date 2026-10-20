@@ -1,4 +1,4 @@
-﻿using DenonMarantzAvrNet.Logger;
+using DenonMarantzAvrNet.Logger;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -140,6 +140,21 @@ internal sealed class DenonHttpTransport : IDisposable
             ReceiverLogger.WriteException("HTTP", $"POST {requestUri}", exception);
             throw;
             // <-----------
+        }
+    }
+
+    internal async Task<string> PostFormAsync(string host, int port, string path,
+        IReadOnlyDictionary<string, string> form, CancellationToken cancellationToken)
+    {
+        NetFrameworkCompat.ThrowIfNull(form, nameof(form));
+        var requestUri = BuildUri(host, Uri.UriSchemeHttp, port, path);
+        ReceiverLogger.Write("HTTP", $"POST form {requestUri} ({form.Count} fields)");
+        using (var content = new FormUrlEncodedContent(form))
+        using (var response = await _httpClient.PostAsync(requestUri, content, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 

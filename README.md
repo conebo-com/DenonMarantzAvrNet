@@ -1,4 +1,4 @@
-# DenonMarantzAvrNet
+﻿# DenonMarantzAvrNet
 
 `DenonMarantzAvrNet` is an asynchronous C# library for controlling compatible Denon and Marantz AV receivers through their local HTTP/XML and Telnet interfaces. The repository also contains a WPF tester application for trying out the library against a real receiver.
 
@@ -6,7 +6,8 @@ The library was developed primarily with a **Denon AVC-X6800H** and its `0301` c
 
 ## Features
 
-- Automatic detection of the HTTP interface on port `80` or `8080`
+- Automatic `Deviceinfo.xml` discovery on HTTP port `80` or `8080`; **independent** read-only `AppCommand.xml`/`AppCommand0300.xml` capability probes on both candidate ports
+- Dynamic `Deviceinfo.xml` capability catalog (`DeviceCapabilities`, native channel definitions, grouped sound-mode catalog, numeric limits and advertised read/write functions); optional **read-only** `GetChLevel`/`GetSoundModeList` wire-format diagnostics. Details: [Dynamic capabilities](docs/DYNAMIC-CAPABILITIES.md).
 - Reads the model, API version, number of zones, MAC address, and device category
 - Receiver profiles selected from the reported model (`avc-x6800h`, `avc-x6700h`, `legacy-goform`, `unknown`), with a manual override for similar models (compatibility mode)
 - Main Zone status:
@@ -31,6 +32,7 @@ The library was developed primarily with a **Denon AVC-X6800H** and its `0301` c
   - Enable and disable mute
   - Select an input by its visible Denon name
 - Zone 2 and Zone 3 volume (up/down/set) and mute through the same unified API
+- Shared persistent Telnet command/event session, serial command correlation, prefix-checked replies, and automatic reconnect on failure
 - Telnet client (`DenonTelnetClient`) for everything that is Telnet-only or Telnet-specific:
   - Queries: power, volume, mute, input, surround mode, digital input mode, Zone 2, Zone 3
   - Zone 2/3 power and input selection
@@ -43,6 +45,7 @@ The library was developed primarily with a **Denon AVC-X6800H** and its `0301` c
   - Set levels from -12.0 to +12.0 dB or change them in steps
   - Set subwoofer channels to OFF and reset all channel levels to Denon factory values
 - Read and set the actual levels of the active speaker preset through the receiver-specific speaker web interface (X6800H: HTTP/11080; X6700H: HTTPS/10443)
+- Read-only native speaker index discovery (`DiscoverSpeakerIndicesAsync`) from the live speaker AJAX levels, distances, menu, configuration and optional layout pages; raw IDs and separate index namespaces are preserved, with profile hints clearly identified
 - Expose the number of speaker presets known for the detected receiver profile
 - Capture and restore persistent speaker-preset level snapshots
 - Read the active speaker preset and switch it through the speaker web interface; the call returns once the receiver confirms the new preset
@@ -62,12 +65,15 @@ The library was developed primarily with a **Denon AVC-X6800H** and its `0301` c
 `DenonMarantzAvrNet.TesterGui` is a WPF application (English and German) for testing the library against your receiver:
 
 - Connects to a host or IP address and shows the detected model and receiver profile
-- If the receiver is not known to the library, or reports no type name, a dialog lets you pick the most similar profile (6800 or 6700). The tester then runs in **compatibility mode**, which is shown in the main window.
+- Receiver profile dialog defaults to **Auto** (including `legacy-goform` for older models). A manual choice of another model is an optional, explicitly displayed **compatibility mode**; it is never required merely to connect.
 - Command list grouped by Status, Main Zone, Zones 2/3, Speakers (HTTP) and Audio / Levels (Telnet). Commands can be sent over Auto, HTTP, or Telnet where the library supports it.
 - Separate output panes for the result, the HTTP traffic and the Telnet traffic, read from the library log
+- A **Discover native speaker indices (read-only)** command for comparing native level/distance IDs and optional menu/layout metadata across receiver models
 - **Check receiver compatibility...** runs a set of **read-only** operations against your receiver, shows each result as green (ok), yellow (warning) or red (error), and prepares a JSON report. You can choose a regular or an anonymized report. The anonymized report leaves out the MAC address and host. The report is only shown and copied to the clipboard. **Nothing is sent automatically**: you paste it into an e-mail yourself.
 
 Some commands in the tester change receiver settings (power, volume, input, levels, distances, presets). The compatibility check does not.
+
+For details of this change, the read-only checks and their limitations, see [HTTP discovery and Telnet session](docs/TRANSPORT-DISCOVERY.md).
 
 ## Requirements
 
@@ -84,6 +90,7 @@ The library targets `net48` and uses C# `latest`. It depends on `Microsoft.Bcl.A
 | --- | --- |
 | `DenonMarantzAvrNet` | Reusable class library |
 | `DenonMarantzAvrNet.TesterGui` | WPF tester and receiver compatibility check |
+| `DenonMarantzAvrNet.Tests` | Standalone, dependency-light net48 offline discovery regression checks |
 
 ## Referencing the library
 
@@ -185,16 +192,15 @@ await receiver.SetSpeakerLevelOffAsync(DenonSpeakerLevelChannel.Subwoofer2); // 
 
 During `InitializeAsync()` the library selects a receiver profile from the reported model name (`X6800` or `X6700`). Receivers on port `80` that are not recognized get the `legacy-goform` profile; all others get `unknown`. These two profiles have no speaker web interface support.
 
-If your receiver is a similar model that is not recognized, you can test it with the profile of a supported model:
+For receivers without a verified profile, keep the automatically detected `legacy-goform` or `unknown` profile. Do not force an X6700H or X6800H profile onto an AVR-X4100W: this would enable unverified speaker-setup HTTP calls.
 
 ```csharp
 await receiver.InitializeAsync();
-
-if (receiver.ReceiverProfileId is "unknown" or "legacy-goform")
-{
-    receiver.SelectReceiverProfile("avc-x6700h"); // or "avc-x6800h"
-}
+Console.WriteLine($"Detected profile: {receiver.ReceiverProfileId}");
+// Leave the automatically detected profile unchanged.
 ```
+
+For deliberate compatibility tests on a *verified similar model*, a profile override remains available through `SelectReceiverProfile()`; do not use it for the AVR-X4100W without proof that it implements the chosen profile's endpoints.
 
 The override stays active until the next successful `InitializeAsync()`. An unsupported profile ID throws an `ArgumentException`.
 
@@ -423,7 +429,7 @@ Start `DenonMarantzAvrNet.TesterGui` from Visual Studio or run the built executa
 - Detail queries are sequential; parallel access is avoided.
 - The input list is loaded separately and cached in the client.
 - The AVC-X6800H requires a CRLF after the XML declaration. Without it, the receiver returns HTTP 200 with an empty `<rx>` element.
-- Telnet commands use one short-lived TCP connection each (port `23`); multi-line responses such as `CV?` are read until their terminating `CVEND` line.
+- Telnet commands and event monitoring share a persistent session on port `23`; multi-line responses such as `CV?` are read until their terminating `CVEND` line.
 - Do not use `DenonAvrClient` concurrently through multiple parallel `UpdateAsync()` calls.
 
 Further details are available in the [API documentation](docs/API.md), [protocol notes](docs/PROTOCOL.md), and [device-testing guide](docs/DEVICE-TESTING.md).
@@ -435,7 +441,8 @@ Further details are available in the [API documentation](docs/API.md), [protocol
 - Events are received through a permanently open Telnet connection; custom event handlers should not perform long-running work.
 - Receiver-specific web features use an internal profile selected during `InitializeAsync()`. The selected profile is exposed as `ReceiverProfileId` for diagnostics, and can be replaced with `SelectReceiverProfile()` for similar models.
 - Speaker-preset levels, speaker distances, and HTTP speaker-preset selection are implemented for both the AVC-X6800H and AVC-X6700H through receiver-specific AJAX profiles. The X6800H uses HTTP/11080; the X6700H uses HTTPS/10443 and an explicitly scoped local-device certificate exception. Legacy and unknown profiles currently report zero known presets and no web speaker-setup support.
-- Manual profile selection only offers the X6800H and X6700H profiles.
+- The tester offers automatic recognition by default, plus explicit X6800H, X6700H, generic Legacy (GoForm) and Unknown selections. Legacy is not a dedicated AVR-X4100W profile.
+- If the tester raises `MissingMethodException` for `DenonAvrClient.AppCommandPort`, rebuild the library and tester together from the same source; see [DLL compatibility troubleshooting](docs/DLL_COMPATIBILITY.md).
 
 ## Help the project
 
@@ -446,3 +453,67 @@ Run **Check receiver compatibility...** in the tester application with your rece
 The implementation was inspired by [`ol-iver/denonavr`](https://github.com/ol-iver/denonavr). The original reference version is based on commit `98566b286efab12496ef623eda498db8bcb5ea09` (`1.4.0-dev`).
 
 License and provenance notices are in [LICENSE.txt](LICENSE.txt) and [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+### WPF runtime assembly check (2026-10-20)
+
+The tester keeps `DenonMarantzAvrNet.dll` separate from the Costura-embedded third-party libraries.
+It verifies `AppCommandPort` and `AppCommand0300Port` getters during startup and, if either
+is missing, shows the identity and physical path of the loaded library instead of throwing
+`MissingMethodException` during a support report. This is a binary/API integrity check,
+not a change in the receiver protocol. See `docs/DLL_COMPATIBILITY.md`.
+
+### Legacy HTTP diagnostics (AVR-X4100W generation)
+
+`DenonAvrClient.DiscoverLegacyHttpAsync()` performs an optional read-only inventory of
+known legacy web/XML and AppCommand status interfaces; no specific X4100W profile is
+required. The WPF compatibility report also provides `CV? raw diagnostic` to show the
+receiver's native channel adjustment list through `CVEND`. Details and caveats:
+[docs/LEGACY_HTTP_RESEARCH.md](docs/LEGACY_HTTP_RESEARCH.md).
+
+
+#### Legacy receiver native speaker matrix (read-only)
+
+For AVR-X4100W-era devices answering AppCommand0300, call
+`await client.DiscoverSpeakerMatrixAsync()` after `InitializeAsync()`.
+The returned `Slots` preserve the AVR's own `NativeId`, optional `Label`, and
+uninterpreted `ControlCode`. This is not a speaker calibration-level/distance
+API. The WPF compatibility test includes **Native speaker matrix (read only)**.
+See `docs/LEGACY_HTTP_RESEARCH.md` for limitations and safety conditions.
+
+## Sound mode families / level vs. calibration / distance unit fix
+
+See [docs/SOUNDMODES_LEVELS_DISTANCES.md](docs/SOUNDMODES_LEVELS_DISTANCES.md) for the new sound-mode family API, read-only source-specific level diagnostics, distance unit conversions and remaining legacy calibration limitations.
+
+### Legacy Speaker Setup (AVR-X4100W generation)
+
+The library can read **persistent** Speaker Setup calibration levels and distances directly from the legacy receiver's HTML pages, independently of the GoForm model profile. Call `GetLegacySpeakerCalibrationAsync()` after initialization. No POST/Set commands are used. This is separate from OPTION/Channel Level Adjust and `CV?`. See [docs/LEGACY-SPEAKER-CALIBRATION.md](docs/LEGACY-SPEAKER-CALIBRATION.md).
+
+### Integrated Sound/Calibration API (`net48`)
+
+```csharp
+var calibration = await receiver.GetSpeakerCalibrationAsync(); // GET only
+foreach (var ch in calibration.Channels)
+    Console.WriteLine($"{ch.NativeChannelCode}: {ch.LevelDecibels} dB, {ch.DistanceMeters} m");
+
+var result = await receiver.SelectSoundModeFamilyAndReadBackAsync(DenonSoundModeFamily.Game);
+Console.WriteLine(result.CurrentModeResponse); // e.g. "MSDTS NEO:X G"
+
+// Persistent writes are never part of diagnostics. LEGACY web-form POST is
+// experimental and requires allowExperimentalLegacyWrite: true:
+// await receiver.SetCalibrationLevelAsync("FL", -6.0, allowExperimentalLegacyWrite: true);
+```
+
+The WPF GUI has a new `Calibration (AUTO: HTML / AJAX, read only)` command and a
+`ONE-PASS Sound family test (switch and restore)` command. The optional
+`OPSMLALL` read query may be unavailable on older Denon units and does not
+indicate that MOVIE/MUSIC/GAME/PURE buttons are unsupported. Refer to
+`docs/INTEGRATED-CALIBRATION-AND-SOUNDMODES.md` for limitations and safety.
+
+### Final one-pass hardware check
+
+The WPF tester includes `ONE-PASS calibration level test (+/-0.5 dB, auto-restore)`.
+This interactive operation temporarily changes a **persistent** channel calibration
+value (default `FL`), verifies readback, and attempts to restore the original value.
+It is **not** part of the read-only compatibility report. Always record/backup the
+receiver settings before running it; restoration cannot be guaranteed if the receiver
+or network becomes unavailable. The `ONE-PASS Sound family test` also verifies the
+restored `MS?` mode explicitly.

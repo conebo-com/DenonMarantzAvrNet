@@ -1,4 +1,4 @@
-# API documentation
+﻿# API documentation
 
 This document describes the publicly usable types and intended lifecycle of `DenonAvrNet`.
 
@@ -67,6 +67,28 @@ The method queries `Deviceinfo.xml` on port 80 first and then port 8080. Initial
 
 On success, `HttpPort`, `DeviceInfo`, `ReceiverProfileId`, and initially known `ReceiverCapabilities` are set. If both ports fail, a `DenonConnectionException` is thrown; its inner `AggregateException` contains the individual errors.
 
+### Dynamic capability catalog (profile-independent)
+
+After `InitializeAsync()`, `DeviceCapabilities` exposes the advertised
+`Deviceinfo.xml` catalog. It is read from the initialization response without
+an extra request. `RefreshDeviceCapabilitiesAsync()` explicitly refreshes the
+catalog; `ProbeAdvertisedReadCommandsAsync()` investigates `GetChLevel` and
+`GetSoundModeList` via read-only HTTP. These methods are **separate** from
+`ReceiverCapabilities` (transport/zone discovery) and from speaker AJAX
+calibration providers. The catalog never proves that an advertised write
+method works or that all listed channel types are connected.
+
+```csharp
+await receiver.InitializeAsync();
+var catalog = receiver.DeviceCapabilities;
+foreach (var channel in catalog.Channels)
+    Console.WriteLine(channel.NativeCode + " " + channel.Step);
+var readProbes = await receiver.ProbeAdvertisedReadCommandsAsync();
+```
+
+See [Dynamic capabilities](DYNAMIC-CAPABILITIES.md) for evidence levels,
+limitations and read-only hardware validation.
+
 ### Receiver-specific HTTP profiles
 
 Denon web interfaces are not consistent across model generations. A receiver can use a modern AppCommand interface for basic status while using a different API for an individual Setup page such as **Speaker Levels**. For that reason, `DenonAvrNet` selects an internal HTTP profile during `InitializeAsync()` and exposes its identifier through `ReceiverProfileId`:
@@ -78,7 +100,7 @@ Denon web interfaces are not consistent across model generations. A receiver can
 | `legacy-goform` | Other receivers initialized through port `80` | 0 | Deliberately unsupported until implemented for that receiver family |
 | `unknown` | Any other receiver | 0 | Deliberately unsupported |
 
-The public Main Zone and Telnet APIs remain unchanged. Profiles isolate only model-specific HTTP details, so adding a receiver-specific feature provider does not require a separate public client class or duplicated control code.
+`AppCommandPort` and `AppCommand0300Port` report the independently discovered ports, or `null` until the endpoint is confirmed. The public Main Zone and Telnet APIs remain unchanged. Profiles isolate only model-specific HTTP details, so adding a receiver-specific feature provider does not require a separate public client class or duplicated control code.
 
 ```csharp
 await receiver.InitializeAsync();
@@ -94,7 +116,7 @@ Task<DenonReceiverState> UpdateAsync(
 
 The method reads Main Zone status and also writes the result to `State`.
 
-On port 8080, these four base queries are initially sent together to `AppCommand.xml`:
+When the AppCommand endpoint has been positively discovered on port 80 or 8080, these four base queries are initially sent together to `AppCommand.xml`:
 
 - `GetAllZonePowerStatus`
 - `GetAllZoneVolume`
@@ -110,7 +132,7 @@ When available, the following commands are then queried through `AppCommand0300.
 - `GetAudioInfo`
 - `GetActiveSpeaker`
 
-Port 80 uses the legacy Main Zone status XML. Extended audio information is generally unavailable there.
+The library probes AppCommand independently of the port carrying `Deviceinfo.xml`; a port-80 receiver may support AppCommand and/or AppCommand0300. When AppCommand is unavailable, the legacy Main Zone status XML remains the fallback. The detailed audio endpoint is probed independently and may be absent.
 
 After the first `UpdateAsync()`, `ReceiverCapabilities.SupportsAppCommand0300` is set to `true` or `false`. Before that query it is `null`, because the extension has not been checked yet.
 
@@ -288,7 +310,7 @@ await receiver.SetSpeakerDistanceAsync(speakerIndex: 0, meters: 3.25);
 
 `GetSpeakerDistancesAsync()` reads `/ajax/speakers/get_config?type=4`. The public API always returns `DenonSpeakerDistance.Meters` and `DenonSpeakerDistanceConfiguration.Step` in meters. `ReceiverUnit` preserves the AVR's current UI unit metadata, and `M2FConvertRatio` exposes optional conversion metadata returned by the receiver.
 
-`SetSpeakerDistanceAsync()` accepts meters and writes the raw value through `set_config?type=4`. The captured X6700H responses show that raw distance values are meters × 100 independently of the UI display unit (`476` = `4.76 m`). A non-positive or non-finite distance is rejected. The X6800H and X6700H profiles support this API; legacy and unknown profiles still throw `NotSupportedException`.
+`SetSpeakerDistanceAsync()` accepts meters and writes the raw value through `set_config?type=4`. The AJAX raw payload is hundredths of the selected display unit (`Unit=1` feet; `Unit=2` meters). The conversion must be compared against the receiver UI before writing. A non-positive or non-finite distance is rejected. The X6800H and X6700H profiles support this API; legacy and unknown profiles still throw `NotSupportedException`.
 
 Only the test-tone stop request `<StopTestTone></StopTestTone>` has been observed so far. The library therefore does not yet implement start or stop commands until the corresponding start request has been recorded unambiguously.
 
@@ -613,3 +635,25 @@ using var receiver = new DenonAvrClient("10.37.0.190");
 ```
 
 Do not create a new client for every individual request.
+
+## Native speaker index discovery (read-only)
+
+```csharp
+DenonSpeakerDiscoveryReport report = await receiver.DiscoverSpeakerIndicesAsync();
+foreach (var level in report.LevelEntries)
+{
+    Console.WriteLine($"index={level.NativeIndex}, raw={level.RawValue}, " +
+        $"receiverLabel={level.ReceiverLabel ?? "unknown"}");
+}
+```
+
+`LevelEntries`, `DistanceEntries`, `ConfigurationEntries` and `LayoutGroupEntries`
+are **separate native index namespaces**. `ReceiverLabel` is only set when the HTTP
+response itself contains an explicit label; `ProfileChannelHint` is an existing
+model-profile assumption, not a dynamic name. Optional AJAX pages may be blocked
+or unavailable, in which case `Warnings` reports the failure. See
+[SPEAKER-DISCOVERY.md](SPEAKER-DISCOVERY.md).
+
+### Legacy persistent speaker calibration (read only)
+
+`DenonAvrClient.GetLegacySpeakerCalibrationAsync(CancellationToken)` requests the two server-rendered HTML content frames of older Denon receivers via HTTP GET. Its `DenonLegacySpeakerCalibrationSnapshot` includes `Levels` (native code, displayed name, signed dB) and `Distances` (native code, displayed name, meters, original display unit/value). Independent of model-specific profiles. This API does not control/set calibration and is not interchangeable with `GetChannelLevelAdjustmentsAsync()` or Telnet `CV?`. See `docs/LEGACY-SPEAKER-CALIBRATION.md`.

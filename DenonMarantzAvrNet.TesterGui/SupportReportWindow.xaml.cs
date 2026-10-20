@@ -192,6 +192,17 @@ namespace DenonMarantzAvrNet.TesterGui
             new("Speakers (HTTP)", "Preset levels", ReadPresetLevelsAsync),
             new("Speakers (HTTP)", "Distances", ReadDistancesAsync),
             new("Speakers (HTTP)", "Configured speakers", ReadConfiguredSpeakersAsync),
+            new("Receiver", "Legacy HTTP discovery (read only)", ReadLegacyHttpDiscoveryAsync),
+            new("Receiver", "Device capabilities (dynamic, read only)", ReadDeviceCapabilitiesAsync),
+            new("Receiver", "Advertised read commands (experimental)", ReadAdvertisedReadCommandsAsync),
+            new("Speakers (HTTP)", "Unified persistent calibration (read only)", ReadUnifiedCalibrationAsync),
+            new("Speakers (HTTP)", "Legacy calibration levels (read only)", ReadLegacyCalibrationLevelsAsync),
+            new("Speakers (HTTP)", "Legacy calibration distances (read only)", ReadLegacyCalibrationDistancesAsync),
+            new("Speakers (HTTP)", "Channel Level Adjust (per-input, NOT calibration)", ReadChannelAdjustmentsAsync),
+            new("Receiver", "Sound mode families (advertised, read only)", ReadSoundFamiliesAsync),
+            new("Telnet", "OPSMLALL grouped sound modes (optional read only)", ReadSoundModeOptionsAsync),
+            new("Speakers (HTTP)", "Native speaker matrix (read only)", ReadSpeakerMatrixAsync),
+            new("Telnet", "CV? raw diagnostic", ReadRawChannelLevelsAsync),
             new("Telnet", "Channel levels", ReadChannelLevelsAsync),
             new("Telnet", "Power (PW?)", token => TelnetQueryAsync(_telnetClient.QueryPowerAsync, token)),
             new("Telnet", "Volume (MV?)", token => TelnetQueryAsync(_telnetClient.QueryVolumeAsync, token)),
@@ -273,6 +284,8 @@ namespace DenonMarantzAvrNet.TesterGui
             builder.AppendLine($"API version:       {deviceInfo.CommunicationApiVersion ?? "-"}");
             builder.AppendLine($"Zones:             {deviceInfo.ZoneCount?.ToString(CultureInfo.InvariantCulture) ?? "-"}");
             builder.AppendLine($"HTTP port:         {_client.HttpPort?.ToString(CultureInfo.InvariantCulture) ?? "-"}");
+            builder.AppendLine($"AppCommand port:   {_client.AppCommandPort?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"}");
+            builder.AppendLine($"AppCmd0300 port:   {_client.AppCommand0300Port?.ToString(CultureInfo.InvariantCulture) ?? "not confirmed"}");
             builder.AppendLine($"Detected profile:  {_detectedProfileId ?? "-"}");
             builder.AppendLine($"Used profile:      {_client.ReceiverProfileId ?? "-"}");
             builder.AppendLine($"Compatibility mode: {(_isCompatibilityMode ? "YES" : "no")}");
@@ -377,6 +390,272 @@ namespace DenonMarantzAvrNet.TesterGui
             // <-----------
         }
 
+        private bool CanProbeLegacyCalibration() =>
+            _client.HttpPort == 80 && _client.ReceiverProfileId == "legacy-goform";
+
+        private async Task<OperationResult> ReadLegacyCalibrationLevelsAsync(CancellationToken cancellationToken)
+        {
+            if (!CanProbeLegacyCalibration())
+                return Warning("Legacy HTML setup not probed: modern AJAX provider or unsupported port.");
+
+            try
+            {
+                var levels = await _client.GetLegacySpeakerCalibrationLevelsAsync(cancellationToken);
+                var builder = new StringBuilder();
+                builder.AppendLine("PERSISTENT SPEAKER SETUP (NOT OPTION / Channel Level Adjust / CV?)");
+                builder.AppendLine($"Calibration level channels: {levels.Count}");
+                foreach (var level in levels)
+                    builder.AppendLine($"  {level.NativeChannelCode,-6} {level.DisplayName,-22} " +
+                        FormatDecibels(level.Decibels));
+                return Ok(builder.ToString().TrimEnd());
+            }
+            catch (HttpRequestException exception)
+            {
+                return Warning("Legacy calibration Levels HTML unavailable: " + exception.GetType().Name);
+            }
+            catch (InvalidDataException exception)
+            {
+                return Warning("Legacy calibration Levels page unrecognized: " + exception.Message);
+            }
+        }
+
+        private async Task<OperationResult> ReadLegacyCalibrationDistancesAsync(CancellationToken cancellationToken)
+        {
+            if (!CanProbeLegacyCalibration())
+                return Warning("Legacy HTML setup not probed: modern AJAX provider or unsupported port.");
+
+            try
+            {
+                var distances = await _client.GetLegacySpeakerCalibrationDistancesAsync(cancellationToken);
+                var builder = new StringBuilder();
+                builder.AppendLine("PERSISTENT SPEAKER DISTANCES (NOT active speaker matrix indices)");
+                builder.AppendLine($"Distance channels: {distances.Count}");
+                builder.AppendLine($"Receiver display unit: {distances[0].ReceiverUnit}");
+                foreach (var distance in distances)
+                    builder.AppendLine($"  {distance.NativeChannelCode,-6} {distance.DisplayName,-22} " +
+                        FormatMeters(distance.Meters));
+                return Ok(builder.ToString().TrimEnd());
+            }
+            catch (HttpRequestException exception)
+            {
+                return Warning("Legacy calibration Distances HTML unavailable: " + exception.GetType().Name);
+            }
+            catch (InvalidDataException exception)
+            {
+                return Warning("Legacy calibration Distances page unrecognized: " + exception.Message);
+            }
+        }
+
+        private async Task<OperationResult> ReadUnifiedCalibrationAsync(CancellationToken cancellationToken)
+        {
+            var setup = await _client.GetSpeakerCalibrationAsync(cancellationToken);
+            var b = new StringBuilder();
+            b.AppendLine("Source: " + setup.Source);
+            b.AppendLine("Channels with level: " + setup.Channels.Count(x => x.LevelDecibels.HasValue));
+            b.AppendLine("Channels with distance: " + setup.Channels.Count(x => x.DistanceMeters.HasValue));
+            foreach (var speaker in setup.Channels)
+                b.AppendLine($"  {SafeAdjustmentToken(speaker.NativeChannelCode),-8} " +
+                    $"level={(speaker.LevelDecibels.HasValue ? speaker.LevelDecibels.Value.ToString("0.0", CultureInfo.InvariantCulture) : "-")} " +
+                    $"distance={(speaker.DistanceMeters.HasValue ? speaker.DistanceMeters.Value.ToString("0.00", CultureInfo.InvariantCulture) : "-")}");
+            return Ok(b.ToString().TrimEnd());
+        }
+
+        private async Task<OperationResult> ReadChannelAdjustmentsAsync(CancellationToken cancellationToken)
+        {
+            var adjustments = await _client.GetChannelLevelAdjustmentsAsync(cancellationToken);
+            if (adjustments.Count == 0)
+                return Warning("GetChLevel returned no channel values. This is NOT calibration.");
+            var builder = new StringBuilder();
+            builder.AppendLine("Per-input OPTION/Channel Level Adjust; NOT Audyssey calibration levels.");
+            builder.AppendLine("Name      Status   SpeakerType  LevelRaw  ValueRaw");
+            foreach (var ch in adjustments)
+                builder.AppendLine($"{SafeAdjustmentToken(ch.Channel),-9} " +
+                    $"{SafeAdjustmentToken(ch.Status),-8} " +
+                    $"{SafeAdjustmentToken(ch.SpeakerType),-12} " +
+                    $"{SafeAdjustmentToken(ch.LevelRaw),-9} " +
+                    $"{SafeAdjustmentToken(ch.ValueRaw)}");
+            return Ok(builder.ToString().TrimEnd());
+        }
+
+        private static string SafeAdjustmentToken(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return "-";
+            var trimmed = value.Trim();
+            return trimmed.Length <= 24 && trimmed.All(c =>
+                char.IsLetterOrDigit(c) || c == '+' || c == '-' ||
+                c == '.' || c == '_' || c == ':' || c == '%')
+                ? trimmed : "[hidden]";
+        }
+
+        private async Task<OperationResult> ReadSoundModeOptionsAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                var modes = await _client.GetSoundModeOptionsAsync(cancellationToken);
+                if (modes.Count == 0)
+                    return Warning("OPSMLALL completed but supplied no recognized sound modes.");
+                var builder = new StringBuilder();
+                foreach (var mode in modes)
+                    builder.AppendLine($"{mode.FamilyCode} {mode.NativeId} " +
+                        $"{(mode.IsActive ? "active" : "-")} {SafeCatalogText(mode.DisplayName)}");
+                return Ok(builder.ToString().TrimEnd());
+            }
+            catch (Exception exception) when (exception is IOException ||
+                exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+            {
+                return Warning("OPSMLALL not verified on this receiver: " + exception.GetType().Name);
+            }
+        }
+
+        private async Task<OperationResult> ReadSoundFamiliesAsync(CancellationToken cancellationToken)
+        {
+            var catalog = await _client.RefreshDeviceCapabilitiesAsync(cancellationToken);
+            var builder = new StringBuilder();
+            builder.AppendLine("Main-Zone sound mode family shortcuts from Deviceinfo.xml:");
+            foreach (var family in catalog.SoundModeFamilies)
+                builder.AppendLine("  " + SafeCatalogText(family));
+            builder.AppendLine("Advertised shortcut != verified mode selection; no commands sent.");
+            return catalog.SoundModeFamilies.Count == 0
+                ? Warning(builder.ToString().TrimEnd()) : Ok(builder.ToString().TrimEnd());
+        }
+
+        private async Task<OperationResult> ReadLegacyHttpDiscoveryAsync(CancellationToken cancellationToken)
+        {
+            var report = await _client.DiscoverLegacyHttpAsync(cancellationToken);
+            var builder = new StringBuilder();
+            foreach (var probe in report.Probes)
+            {
+                builder.AppendLine($"{probe.Method} {probe.Path}: {probe.Result} ({probe.Name})");
+                if (!string.IsNullOrWhiteSpace(probe.Root))
+                    builder.AppendLine($"  Root: {probe.Root}");
+                foreach (var path in probe.ElementPaths)
+                    builder.AppendLine($"  XML: {path}");
+                foreach (var link in probe.DiscoveredLinks)
+                    builder.AppendLine($"  Web reference (not fetched): {link}");
+                if (!string.IsNullOrEmpty(probe.Note))
+                    builder.AppendLine($"  Note: {probe.Note}");
+            }
+            // No private XML values are copied into the compatibility report.
+            return report.Probes.Any(p => p.Result == "Received")
+                ? Ok(builder.ToString().TrimEnd())
+                : Warning(builder.ToString().TrimEnd());
+        }
+
+        private async Task<OperationResult> ReadDeviceCapabilitiesAsync(CancellationToken cancellationToken)
+        {
+            var catalog = await _client.RefreshDeviceCapabilitiesAsync(cancellationToken);
+            var builder = new StringBuilder();
+            builder.AppendLine($"Deviceinfo port: {catalog.HttpPort}");
+            builder.AppendLine($"Advertised command declarations: {catalog.Commands.Count}");
+            builder.AppendLine($"Enabled: {catalog.Commands.Count(c => c.Advertised)}");
+            builder.AppendLine($"Possible channel types: {catalog.Channels.Count} (not configured speakers)");
+            builder.AppendLine($"Sound mode catalog: {catalog.SoundModes.Count} (not signal-dependent)");
+            builder.AppendLine($"Max volume: {catalog.MaximumVolume?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}");
+            builder.AppendLine($"Volume step: {catalog.VolumeStep?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}");
+            builder.AppendLine($"Quick Select slots: {catalog.QuickSelectCount?.ToString() ?? "unknown"}");
+            builder.AppendLine($"Tuner presets: {catalog.TunerPresetCount?.ToString() ?? "unknown"}");
+            builder.AppendLine("READ COMMAND CLAIMS:");
+            foreach (var name in new[] { "GetChLevel", "GetSoundModeList", "GetSoundMode" })
+                builder.AppendLine($"  {name}: {(catalog.IsCommandAdvertised(name) ? "advertised" : "not advertised")}");
+
+            builder.AppendLine("CHANNEL TYPES (source: Deviceinfo.xml):");
+            foreach (var ch in catalog.Channels)
+            {
+                // Do not print arbitrary receiver-configured user text into support reports.
+                if (SafeCatalogText(ch.NativeCode) == "(unrecognized entry)") continue;
+                builder.AppendLine($"  {ch.NativeCode,-5} min={FormatCapabilityNumber(ch.Minimum),-6} " +
+                    $"max={FormatCapabilityNumber(ch.Maximum),-6} " +
+                    $"default={FormatCapabilityNumber(ch.DefaultValue),-6} " +
+                    $"step={FormatCapabilityNumber(ch.Step)}" +
+                    (ch.MayBePlaceholder ? " [fixed-range / possible placeholder]" : ""));
+            }
+            builder.AppendLine("MAIN-ZONE SOUND MODE CATALOG (not current availability):");
+            foreach (var mode in catalog.SoundModes)
+            {
+                // Catalog entries may be firmware strings. Constrain to safe characters.
+                var group = SafeCatalogText(mode.Group);
+                var name = SafeCatalogText(mode.Name);
+                builder.AppendLine($"  {group}: {name}");
+            }
+            builder.AppendLine("Declared commands are not verified read/write support.");
+            return Ok(builder.ToString().TrimEnd());
+        }
+
+        private async Task<OperationResult> ReadAdvertisedReadCommandsAsync(CancellationToken cancellationToken)
+        {
+            var results = await _client.ProbeAdvertisedReadCommandsAsync(cancellationToken);
+            var builder = new StringBuilder();
+            foreach (var result in results)
+            {
+                builder.AppendLine($"{result.Command} @ {result.Endpoint}:{result.HttpPort} = {result.Status}");
+                foreach (var field in result.ResponseFields.Take(40))
+                    builder.AppendLine($"  XML: {field}");
+                if (!string.IsNullOrEmpty(result.Note)) builder.AppendLine($"  Note: {result.Note}");
+            }
+            builder.AppendLine("Only read queries were issued. XML VALUES were deliberately excluded.");
+            return results.Any(r => r.Status == "Received")
+                ? Ok(builder.ToString().TrimEnd()) : Warning(builder.ToString().TrimEnd());
+        }
+
+        private static string FormatCapabilityNumber(double? value) =>
+            value?.ToString("0.###", CultureInfo.InvariantCulture) ?? "?";
+
+        private static string SafeCatalogText(string value) =>
+            value.Length <= 64 && value.All(c => char.IsLetterOrDigit(c) ||
+                c == ' ' || c == '-' || c == '/' || c == '+' || c == '.' || c == '&')
+                ? value : "(unrecognized entry)";
+
+        private async Task<OperationResult> ReadSpeakerMatrixAsync(CancellationToken cancellationToken)
+        {
+            var matrix = await _client.DiscoverSpeakerMatrixAsync(cancellationToken);
+            var builder = new StringBuilder();
+            builder.AppendLine($"Response: {matrix.Status}; port: {matrix.HttpPort?.ToString() ?? "unknown"}");
+            builder.AppendLine($"Native speaker slots: {matrix.Slots.Count}");
+            builder.AppendLine($"{"Native ID",-20} {"Control",-10} Label");
+            foreach (var slot in matrix.Slots)
+            {
+                // Support reports may be forwarded to third parties. Only display
+                // standard short channel tokens, not arbitrary/user-entered names.
+                var label = IsSafeSpeakerCode(slot.Label) ? slot.Label :
+                    string.IsNullOrEmpty(slot.Label) ? "(none)" : "(custom label withheld)";
+                var control = slot.ControlCode ?? "(none)";
+                if (slot.ControlCode != null && (slot.ControlCode.Length > 3 ||
+                    !slot.ControlCode.All(ch => ch >= '0' && ch <= '9')))
+                    control = "(non-numeric)";
+                builder.AppendLine($"{slot.NativeId,-20} {control,-10} {label}");
+            }
+            builder.AppendLine("Control values are raw AVR codes; no universal meaning is assumed.");
+            builder.AppendLine("These are neither Audyssey calibration levels nor speaker distances.");
+            return matrix.Status == "Received"
+                ? Ok(builder.ToString().TrimEnd())
+                : Warning(builder.ToString().TrimEnd());
+        }
+
+        private static bool IsSafeSpeakerCode(string? value)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length > 12) return false;
+            // Exact token set: never leak arbitrary custom room/speaker names.
+            var labels = new[] { "FL", "FR", "C", "SW", "SW1", "SW2", "SW3", "SW4",
+                "SL", "SR", "SBL", "SBR", "SB", "FHL", "FHR", "RHL", "RHR",
+                "TFL", "TFR", "TML", "TMR", "TRL", "TRR", "FWL", "FWR",
+                "FDL", "FDR", "SDL", "SDR", "TS", "SHL", "SHR" };
+            return labels.Any(code => string.Equals(code, value,
+                StringComparison.OrdinalIgnoreCase));
+        }
+
+        private async Task<OperationResult> ReadRawChannelLevelsAsync(CancellationToken cancellationToken)
+        {
+            var lines = await _telnetClient.QueryRawChannelLevelsAsync(cancellationToken);
+            var builder = new StringBuilder();
+            foreach (var line in lines) builder.AppendLine(line);
+            var completed = lines.Any(line => string.Equals(line, "CVEND", StringComparison.OrdinalIgnoreCase));
+            var channels = lines.Count(line => line.StartsWith("CV", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(line, "CVEND", StringComparison.OrdinalIgnoreCase));
+            builder.AppendLine($"Response complete: {completed}; channel entries: {channels}");
+            builder.AppendLine("CV reports channel-level adjustment, not calibration or wiring.");
+            return completed ? Ok(builder.ToString().TrimEnd()) : Warning(builder.ToString().TrimEnd());
+        }
+
         private async Task<OperationResult> ReadChannelLevelsAsync(CancellationToken cancellationToken)
         {
             var levels = await _client.GetSpeakerLevelsAsync(DenonControlProtocol.Telnet, cancellationToken);
@@ -464,6 +743,8 @@ namespace DenonMarantzAvrNet.TesterGui
                     CommunicationApiVersion = deviceInfo?.CommunicationApiVersion,
                     ZoneCount = deviceInfo?.ZoneCount,
                     HttpPort = _client.HttpPort,
+                    AppCommandPort = _client.AppCommandPort,
+                    AppCommand0300Port = _client.AppCommand0300Port,
                     MacAddress = anonymized ? null : deviceInfo?.MacAddress
                 },
                 Capabilities = _client.ReceiverCapabilities,

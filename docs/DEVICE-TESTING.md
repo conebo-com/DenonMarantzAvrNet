@@ -6,7 +6,7 @@ This checklist tests the library against a real Denon or Marantz receiver. It co
 
 - The receiver and computer are on the same reachable network.
 - Network control is enabled on the receiver.
-- The .NET 10 SDK is installed.
+- Visual Studio with the .NET Framework 4.8 targeting pack is installed.
 - The repository has been built:
 
 ```powershell
@@ -53,7 +53,7 @@ For an X6800H, verify `ReceiverProfileId == "avc-x6800h"`; for an X6700H, verify
 
 The X6800H speaker setup uses HTTP/11080. The X6700H uses HTTPS/10443; the library accepts the receiver's local device certificate only for this explicitly profiled speaker-setup transport. A TLS error here indicates that the receiver-specific HTTPS path or certificate handling is not active.
 
-Programmatic distance tests can use `GetSpeakerDistancesAsync()` and `SetSpeakerDistanceAsync()`. Read values are always returned in meters. On the captured X6700H interface, raw values are meters × 100 (`476` = `4.76 m`); after a write, reread the value and restore the original distance.
+Programmatic distance tests can use `GetSpeakerDistancesAsync()` and `SetSpeakerDistanceAsync()`. Read values are always returned in meters. Do not infer meters from raw values without checking `<Unit>`: `1` is feet and `2` is meters in the currently documented AJAX interface. Compare with the receiver UI and validate after writing.
 
 `GetConfiguredSpeakersAsync()` must return the persistent physical speaker setup even when the current input signal does not activate all channels. Do not compare its count directly with `state.Audio.ActiveSpeakerChannels`: those channels describe current playback activity, not speaker configuration.
 
@@ -70,3 +70,13 @@ For a device-specific error, please record at least:
 - If possible, the associated raw XML response from the debugger
 
 An HTTP 200 status with an empty `<rx>` is not valid protocol content. On the AVC-X6800H, this was caused by a missing line break after the XML declaration; the library already adds that line break automatically.
+
+## Read-only speaker index inventory (new)
+
+See [SPEAKER-DISCOVERY.md](SPEAKER-DISCOVERY.md). The tester command 'Discover native speaker indices (read-only)' reads up to five AJAX pages. Note the separation of levels, distances, configuration and layout groups; none of these indices are equated by this method. Optional pages may be temporarily inaccessible. No receiver settings are changed.
+
+Offline parser checks on Windows: `dotnet run --project .\DenonMarantzAvrNet.Tests` (net48).
+
+## HTTP/Telnet reliability test (2026-10-20)
+
+See [TRANSPORT-DISCOVERY.md](TRANSPORT-DISCOVERY.md). With the X4100W, leave the profile on Auto/`legacy-goform`. Do not force the X6700H profile. The report now includes the independently detected AppCommand and 0300 ports. Validate prefix-correlated Telnet `PW?`, `MV?`, `MU?`, `SI?`, `MS?` and `CV?` responses. A `MVMAX` status must not appear as the result of `MV?` or `MU?`. Run the offline standalone tests using `dotnet run --project .\DenonMarantzAvrNet.Tests\DenonMarantzAvrNet.Tests.csproj` (the test project is an executable, not an xUnit/MSTest project).

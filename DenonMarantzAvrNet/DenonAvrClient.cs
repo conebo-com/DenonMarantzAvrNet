@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.Sockets;
 using System.Net.Http;
 using DenonMarantzAvrNet.Protocol;
@@ -6,6 +6,7 @@ using DenonMarantzAvrNet.Transport;
 using DenonMarantzAvrNet.Models;
 using DenonMarantzAvrNet.Profiles;
 using DenonMarantzAvrNet.Exceptions;
+using DenonMarantzAvrNet.Discovery;
 
 namespace DenonMarantzAvrNet;
 
@@ -80,6 +81,15 @@ public sealed class DenonAvrClient : IDisposable
     /// <summary>Gets the HTTP port detected by <see cref="InitializeAsync"/>.</summary>
     public int? HttpPort { get; private set; }
 
+    /// <summary>Port which actually answered AppCommand.xml, independently discovered.</summary>
+    public int? AppCommandPort { get; private set; }
+
+    /// <summary>Port which actually answered AppCommand0300.xml with useful data.</summary>
+    public int? AppCommand0300Port { get; private set; }
+
+    /// <summary>Last receiver-advertised capability catalog; no model profile is applied.</summary>
+    public DenonDeviceCapabilityDiscovery? DeviceCapabilities { get; private set; }
+
     /// <summary>Gets the device information returned by the last initialization.</summary>
     public DenonDeviceInfo? DeviceInfo { get; private set; }
 
@@ -127,8 +137,23 @@ public sealed class DenonAvrClient : IDisposable
                 var deviceInfo = DenonXmlParser.ParseDeviceInfo(xml);
                 HttpPort = port;
                 DeviceInfo = deviceInfo;
+                // Parsing metadata is optional and must never stop basic receiver access.
+                try
+                {
+                    DeviceCapabilities = DenonDeviceCapabilityReader.Parse(xml, port);
+                }
+                catch (Exception exception) when (exception is System.Xml.XmlException ||
+                    exception is InvalidDataException)
+                {
+                    DeviceCapabilities = null;
+                }
                 _receiverProfile = DenonReceiverProfileRegistry.Select(deviceInfo, port);
-                ReceiverCapabilities = CreateReceiverCapabilities(deviceInfo, port);
+                AppCommandPort = null;
+                AppCommandPort = await DiscoverAppCommandPortAsync(port, cancellationToken)
+                    .ConfigureAwait(false);
+                AppCommand0300Port = null;
+                ReceiverCapabilities = CreateReceiverCapabilities(
+                    deviceInfo, AppCommandPort is not null);
                 State = null;
                 _availableInputs = null;
                 _speakerLevelSnapshot = null;
@@ -181,65 +206,67 @@ public sealed class DenonAvrClient : IDisposable
     public async Task<DenonReceiverState> UpdateAsync(CancellationToken cancellationToken = default)
     {
         var port = GetInitializedPort();
+        DenonReceiverState mainZone;
 
-        if (port == 8080)
+        if (ReceiverCapabilities?.SupportsAppCommand == true)
         {
-            var availableInputs = _availableInputs ??
-                await RefreshInputsAsync(cancellationToken).ConfigureAwait(false);
-            var mainZoneState = await QueryMainZoneStatusAsync(
-                port,
-                availableInputs,
-                cancellationToken).ConfigureAwait(false);
-            var audioInfoXml = await TryQueryAppCommand0300Async(
-                port,
-                DenonAppCommand.CreateDetailedRequest(
-                    DenonAppCommand.GetAudioInfo,
-                    "inputmode",
-                    "output",
-                    "signal",
-                    "sound",
-                    "fs"),
-                cancellationToken).ConfigureAwait(false);
-            var activeSpeakersXml = await TryQueryAppCommand0300Async(
-                port,
-                DenonAppCommand.CreateDetailedRequest(
-                    DenonAppCommand.GetActiveSpeaker,
-                    "activespall"),
-                cancellationToken).ConfigureAwait(false);
-
-            State = mainZoneState with
+            try
             {
-                Audio = DenonXmlParser.ParseAppCommandAudioInfo(
-                    audioInfoXml,
-                    activeSpeakersXml)
-            };
-            var capabilities = ReceiverCapabilities;
-            if (capabilities is not null)
+                var availableInputs = _availableInputs ??
+                    await RefreshInputsAsync(cancellationToken).ConfigureAwait(false);
+                mainZone = await QueryMainZoneStatusAsync(
+                    port, availableInputs, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
+                (exception is DenonProtocolException || exception is HttpRequestException))
             {
-                ReceiverCapabilities = capabilities with
-                {
-                    SupportsAppCommand0300 = audioInfoXml is not null || activeSpeakersXml is not null
-                };
+                // A partially compatible AppCommand endpoint must not break the
+                // legacy MainZone status reader. Keep its support flag, because
+                // individual commands may still work on this receiver.
+                mainZone = await QueryLegacyMainZoneAsync(port, cancellationToken).ConfigureAwait(false);
             }
         }
         else
         {
-            var xml = await _httpTransport.GetStringAsync(
-                Host,
-                port,
-                DenonEndpoints.MainZoneStatus,
-                cancellationToken).ConfigureAwait(false);
-
-            State = DenonXmlParser.ParseMainZoneStatus(xml);
-            _availableInputs = State.AvailableInputs;
-            var capabilities = ReceiverCapabilities;
-            if (capabilities is not null)
-            {
-                ReceiverCapabilities = capabilities with { SupportsAppCommand0300 = false };
-            }
+            mainZone = await QueryLegacyMainZoneAsync(port, cancellationToken).ConfigureAwait(false);
         }
 
+        // Probe 0300 independently of port AND of AppCommand.xml. A port 80
+        // receiver may expose detailed status even when the basic API differs.
+        var audioInfoXml = (ReceiverCapabilities?.SupportsAppCommand0300 != false)
+            ? await TryQueryAppCommand0300Async(
+                port,
+                DenonAppCommand.CreateDetailedRequest(
+                    DenonAppCommand.GetAudioInfo,
+                    "inputmode", "output", "signal", "sound", "fs"),
+                cancellationToken).ConfigureAwait(false)
+            : null;
+        var activeSpeakersXml = (ReceiverCapabilities?.SupportsAppCommand0300 != false)
+            ? await TryQueryAppCommand0300Async(
+                port,
+                DenonAppCommand.CreateDetailedRequest(
+                    DenonAppCommand.GetActiveSpeaker, "activespall"),
+                cancellationToken).ConfigureAwait(false)
+            : null;
+
+        var audio = DenonXmlParser.ParseAppCommandAudioInfo(audioInfoXml, activeSpeakersXml);
+        State = mainZone with { Audio = audio };
+        if (ReceiverCapabilities is { } capabilities)
+            ReceiverCapabilities = capabilities with
+            {
+                SupportsAppCommand0300 = audioInfoXml is not null || activeSpeakersXml is not null
+            };
         return State;
+    }
+
+    private async Task<DenonReceiverState> QueryLegacyMainZoneAsync(
+        int port, CancellationToken cancellationToken)
+    {
+        var xml = await _httpTransport.GetStringAsync(
+            Host, port, DenonEndpoints.MainZoneStatus, cancellationToken).ConfigureAwait(false);
+        var state = DenonXmlParser.ParseMainZoneStatus(xml);
+        _availableInputs = state.AvailableInputs;
+        return state;
     }
 
     /// <summary>
@@ -328,7 +355,7 @@ public sealed class DenonAvrClient : IDisposable
             ReceiverCapabilities = capabilities with { SupportsTelnet = true };
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
-                                          exception is IOException or SocketException or TaskCanceledException)
+                                          exception is IOException or SocketException or OperationCanceledException)
         {
             ReceiverCapabilities = capabilities with { SupportsTelnet = false };
         }
@@ -343,32 +370,36 @@ public sealed class DenonAvrClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         var port = GetInitializedPort();
-        IReadOnlyList<string> inputs;
+        IReadOnlyList<string>? inputs = null;
 
-        if (port == 8080)
+        if (ReceiverCapabilities?.SupportsAppCommand == true)
         {
-            var xml = await QueryAppCommandAsync(
-                port,
-                DenonAppCommand.GetDeletedSource,
-                cancellationToken).ConfigureAwait(false);
-            inputs = DenonXmlParser.ParseAppCommandAvailableInputs(xml);
+            try
+            {
+                var xml = await QueryAppCommandAsync(
+                    port, DenonAppCommand.GetDeletedSource, cancellationToken).ConfigureAwait(false);
+                if (DenonXmlParser.HasAppCommandData(xml))
+                {
+                    inputs = DenonXmlParser.ParseAppCommandAvailableInputs(xml);
+                }
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
+                (exception is HttpRequestException || exception is DenonProtocolException))
+            {
+                // Use older MainZone input list if this individual command is unsupported.
+            }
         }
-        else
+
+        if (inputs is null)
         {
             var xml = await _httpTransport.GetStringAsync(
-                Host,
-                port,
-                DenonEndpoints.MainZoneStatus,
-                cancellationToken).ConfigureAwait(false);
+                Host, port, DenonEndpoints.MainZoneStatus, cancellationToken).ConfigureAwait(false);
             inputs = DenonXmlParser.ParseMainZoneStatus(xml).AvailableInputs;
         }
 
         _availableInputs = inputs;
         if (State is not null)
-        {
             State = State with { AvailableInputs = inputs };
-        }
-
         return inputs;
     }
 
@@ -381,7 +412,7 @@ public sealed class DenonAvrClient : IDisposable
         {
             var bundledXml = await _httpTransport.PostXmlAsync(
                 Host,
-                port,
+                AppCommandPort ?? port,
                 DenonEndpoints.AppCommand,
                 DenonAppCommand.CreateRequest(DenonAppCommand.MainZoneStatusCommands),
                 cancellationToken).ConfigureAwait(false);
@@ -436,13 +467,46 @@ public sealed class DenonAvrClient : IDisposable
             availableInputs);
     }
 
+    /// <summary>Tries the two documented HTTP ports, without assuming Deviceinfo and AppCommand share one.</summary>
+    private async Task<int?> DiscoverAppCommandPortAsync(int deviceInfoPort, CancellationToken cancellationToken)
+    {
+        foreach (var candidate in new[] { deviceInfoPort, deviceInfoPort == 80 ? 8080 : 80 })
+        {
+            if (await ProbeAppCommandAsync(candidate, cancellationToken).ConfigureAwait(false))
+                return candidate;
+        }
+        return null;
+    }
+
+    /// <summary>Probes the actual endpoint on a candidate port.</summary>
+    private async Task<bool> ProbeAppCommandAsync(int port, CancellationToken cancellationToken)
+    {
+        // An optional endpoint must not block initialization for the full HTTP timeout.
+        using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        {
+            timeout.CancelAfter(TimeSpan.FromSeconds(3));
+            try
+            {
+                var xml = await QueryAppCommandAsync(
+                    port, DenonAppCommand.GetAllZonePowerStatus, timeout.Token).ConfigureAwait(false);
+                return DenonXmlParser.HasAppCommandData(xml);
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
+                (exception is HttpRequestException || exception is OperationCanceledException ||
+                 exception is DenonProtocolException || exception is System.Xml.XmlException))
+            {
+                return false;
+            }
+        }
+    }
+
     private Task<string> QueryAppCommandAsync(
         int port,
         string command,
         CancellationToken cancellationToken) =>
         _httpTransport.PostXmlAsync(
             Host,
-            port,
+            AppCommandPort ?? port,
             DenonEndpoints.AppCommand,
             DenonAppCommand.CreateRequest(command),
             cancellationToken);
@@ -452,21 +516,29 @@ public sealed class DenonAvrClient : IDisposable
         string request,
         CancellationToken cancellationToken)
     {
-        try
+        var preferred = AppCommand0300Port ?? AppCommandPort ?? port;
+        var candidates = AppCommand0300Port.HasValue
+            ? new[] { preferred }
+            : new[] { preferred, preferred == 80 ? 8080 : 80 };
+        foreach (var candidate in candidates)
         {
-            return await _httpTransport.PostXmlAsync(
-                Host,
-                port,
-                DenonEndpoints.AppCommand0300,
-                request,
-                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var xml = await _httpTransport.PostXmlAsync(
+                    Host, candidate, DenonEndpoints.AppCommand0300,
+                    request, cancellationToken).ConfigureAwait(false);
+                if (!DenonXmlParser.HasAppCommandData(xml)) continue;
+                AppCommand0300Port = candidate;
+                return xml;
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
+                (exception is HttpRequestException || exception is DenonProtocolException ||
+                 exception is System.Xml.XmlException || exception is OperationCanceledException))
+            {
+                // This optional endpoint is not available on this candidate port.
+            }
         }
-        catch (HttpRequestException) when (!cancellationToken.IsCancellationRequested)
-        {
-            // Audio details are an optional capability. Receivers without the
-            // AppCommand0300 endpoint must still return their basic state.
-            return null;
-        }
+        return null;
     }
 
     /// <summary>Switches the Main Zone on using <see cref="PreferredControlProtocol"/>.</summary>
@@ -806,6 +878,404 @@ public sealed class DenonAvrClient : IDisposable
             speakerIndex,
             decibels,
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the native speaker indices from each AJAX page (levels, distances, menu,
+    /// configuration and layout). This does not change receiver settings and does not
+    /// equate indices from different pages. Unsupported optional pages produce warnings.
+    /// Profile mappings are returned as hints only, never as receiver-confirmed labels.
+    /// </summary>
+    public Task<DenonSpeakerDiscoveryReport> DiscoverSpeakerIndicesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var profile = GetReceiverProfile();
+        var options = profile.SpeakerDiscoveryOptions
+            ?? throw new NotSupportedException(
+                $"Speaker AJAX discovery is not configured for profile '{profile.Id}'.");
+        return DenonSpeakerDiscoveryReader.ReadAsync(
+            new DenonProfileContext(Host, _httpTransport),
+            options,
+            profile.Id,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Diagnoses documented, read-only Legacy HTTP and AppCommand endpoints on
+    /// the detected HTTP port. This does not depend on an X4100W model profile.
+    /// No links discovered inside the web UI are followed automatically.
+    /// </summary>
+    public Task<DenonLegacyHttpDiscoveryReport> DiscoverLegacyHttpAsync(
+        CancellationToken cancellationToken = default) =>
+        DenonLegacyHttpDiscoveryReader.ReadAsync(
+            Host, GetInitializedPort(), _httpTransport, cancellationToken);
+
+    /// <summary>
+    /// Reads native GetActiveSpeaker matrix entries through AppCommand0300 without
+    /// requiring a model speaker profile. The reported slots/control codes are
+    /// not calibration-level or distance indices. An empty result does not mean
+    /// the receiver has no configured speakers.
+    /// </summary>
+    public async Task<DenonSpeakerMatrixDiscovery> DiscoverSpeakerMatrixAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        var port = GetInitializedPort();
+        var xml = await TryQueryAppCommand0300Async(port,
+            DenonAppCommand.CreateDetailedRequest(DenonAppCommand.GetActiveSpeaker, "activespall"),
+            cancellationToken).ConfigureAwait(false);
+        return DenonSpeakerMatrixDiscoveryReader.Parse(xml,
+            xml == null ? (int?)null : AppCommand0300Port);
+    }
+
+    /// <summary>
+    /// Re-reads the full Deviceinfo capability catalog independently of model profiles.
+    /// The resulting metadata is advertised, not necessarily runtime-verifiable.
+    /// No writes are sent. The raw XML, MAC address and host are not stored here.
+    /// </summary>
+    public async Task<DenonDeviceCapabilityDiscovery> RefreshDeviceCapabilitiesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var port = GetInitializedPort();
+        var xml = await _httpTransport.GetStringAsync(
+            Host, port, DenonEndpoints.DeviceInfo, cancellationToken).ConfigureAwait(false);
+        var discovered = DenonDeviceCapabilityReader.Parse(xml, port);
+        DeviceCapabilities = discovered;
+        return discovered;
+    }
+
+    /// <summary>
+    /// Tests two advertised read commands on both XML protocol families. A response
+    /// whose structure is recognized is NOT proof that all returned values are
+    /// semantically usable; these probes never send Set commands.
+    /// </summary>
+    public async Task<IReadOnlyList<DenonReadCommandProbe>> ProbeAdvertisedReadCommandsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var port = GetInitializedPort();
+        var capabilities = DeviceCapabilities ??
+            await RefreshDeviceCapabilitiesAsync(cancellationToken).ConfigureAwait(false);
+        var probes = new List<DenonReadCommandProbe>();
+        foreach (var command in new[] { "GetChLevel", "GetSoundModeList" })
+        {
+            if (!capabilities.IsCommandAdvertised(command))
+            {
+                probes.Add(new DenonReadCommandProbe(command, "Deviceinfo.xml", port,
+                    "NotAdvertised", Array.Empty<string>(), "No enabled declaration in Deviceinfo.xml."));
+                continue;
+            }
+
+            // The Deviceinfo file advertises the command names, but does not
+            // reliably specify which AppCommand wire envelope each needs.
+            // Probe both read-only encodings, without guessing writable commands.
+            foreach (var detailed in new[] { false, true })
+            {
+                var endpoint = detailed ? DenonEndpoints.AppCommand0300 : DenonEndpoints.AppCommand;
+                var candidatePort = detailed ? AppCommand0300Port ?? AppCommandPort ?? port
+                                             : AppCommandPort ?? port;
+                var request = detailed ? DenonAppCommand.CreateDetailedRequest(command)
+                                       : DenonAppCommand.CreateRequest(command);
+                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                {
+                    timeout.CancelAfter(TimeSpan.FromSeconds(3));
+                    try
+                    {
+                        var response = await _httpTransport.PostXmlAsync(Host, candidatePort,
+                            endpoint, request, timeout.Token).ConfigureAwait(false);
+                        probes.Add(DenonReadCommandInspector.Inspect(command, endpoint,
+                            candidatePort, response));
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception exception) when (exception is HttpRequestException ||
+                        exception is OperationCanceledException || exception is InvalidDataException ||
+                        exception is System.Xml.XmlException || exception is IOException)
+                    {
+                        probes.Add(new DenonReadCommandProbe(command, endpoint, candidatePort,
+                            "Error", Array.Empty<string>(), exception is OperationCanceledException
+                                ? "Probe timed out" : exception.GetType().Name));
+                    }
+                }
+            }
+        }
+        return probes;
+    }
+
+    /// <summary>
+    /// Reads the optional, per-input Channel Level Adjust menu through the legacy
+    /// AppCommand interface. These are NOT the Audyssey/manual speaker calibration levels.
+    /// The original receiver field values are returned without guessing their units.
+    /// </summary>
+    public async Task<IReadOnlyList<DenonChannelLevelAdjustment>> GetChannelLevelAdjustmentsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        var port = AppCommandPort ?? GetInitializedPort();
+        var response = await _httpTransport.PostXmlAsync(Host, port,
+            DenonEndpoints.AppCommand, DenonAppCommand.CreateRequest("GetChLevel"),
+            cancellationToken).ConfigureAwait(false);
+        return DenonChannelLevelAdjustmentReader.Parse(response);
+    }
+
+    /// <summary>
+    /// Selects Movie, Music, Game, Direct or Pure Direct via the receiver's
+    /// native Telnet sound-mode family commands. The command changes AVR state.
+    /// Deviceinfo advertisements are hints, not guaranteed runtime availability.
+    /// </summary>
+    public async Task<string> SelectSoundModeFamilyAsync(DenonSoundModeFamily family,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (ReceiverCapabilities?.SupportsTelnet == false)
+            throw new NotSupportedException("Telnet is not available for this receiver.");
+        return await _telnetClient.SelectSoundModeFamilyAsync(family, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads the optional native dynamic Movie/Music/Game/Pure list; a timeout
+    /// means that this protocol is not verified, not that the AVR has no modes.
+    /// </summary>
+    public Task<IReadOnlyList<DenonSoundModeOption>> GetSoundModeOptionsAsync(
+        CancellationToken cancellationToken = default) =>
+        _telnetClient.GetSoundModeOptionsAsync(cancellationToken);
+
+    /// <summary>
+    /// Reads persistent calibration levels and distances directly from a legacy
+    /// Denon Speakers/Levels and Speakers/Distances web setup, using only HTTP GET.
+    /// Works by checking the actual pages, not by assuming a model profile.
+    /// Does not use per-input GetChLevel, Telnet CV?, or modern AJAX preset indices.
+    /// Both pages must be available; otherwise this method fails explicitly.
+    /// </summary>
+    public Task<DenonLegacySpeakerCalibrationSnapshot> GetLegacySpeakerCalibrationAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return DenonLegacySpeakerCalibrationReader.ReadAsync(
+            Host, GetInitializedPort(), _httpTransport, cancellationToken);
+    }
+
+    /// <summary>Reads persistent legacy speaker setup calibration levels (signed dB) through HTTP GET.</summary>
+    public Task<IReadOnlyList<DenonLegacySpeakerCalibrationLevel>> GetLegacySpeakerCalibrationLevelsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return DenonLegacySpeakerCalibrationReader.ReadLevelsAsync(
+            Host, GetInitializedPort(), _httpTransport, cancellationToken);
+    }
+
+    /// <summary>Reads persistent legacy speaker setup distances, normalized to meters, through HTTP GET.</summary>
+    public async Task<IReadOnlyList<DenonLegacySpeakerCalibrationDistance>> GetLegacySpeakerCalibrationDistancesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        var page = await DenonLegacySpeakerCalibrationReader.ReadDistancesAsync(
+            Host, GetInitializedPort(), _httpTransport, cancellationToken).ConfigureAwait(false);
+        return page.Speakers;
+    }
+
+    /// <summary>
+    /// Reads persistent calibration through the correct receiver family without
+    /// forcing consumers to handle legacy HTML vs modern speaker AJAX.
+    /// The snapshot is a read-only representation and is NOT the per-input CV trim.
+    /// </summary>
+    public async Task<DenonSpeakerCalibrationSnapshot> GetSpeakerCalibrationAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        var profile = GetReceiverProfile();
+        var channels = new Dictionary<string, DenonCalibrationChannel>(StringComparer.OrdinalIgnoreCase);
+        if (profile.SupportsSpeakerPresetLevels && profile.SupportsSpeakerDistances)
+        {
+            var context = new DenonProfileContext(Host, _httpTransport);
+            var levels = await profile.SpeakerPresetLevels.GetLevelsAsync(context, cancellationToken)
+                .ConfigureAwait(false);
+            var distances = await profile.SpeakerDistances.GetDistancesAsync(context, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var level in levels)
+            {
+                // Do not merge aggregate multichannel pseudo-indices with individual speakers.
+                var native = level.Channel.HasValue && IsSingleChannel(level.Channel.Value)
+                    ? ChannelName(level.Channel.Value) : "LEVEL#" + level.SpeakerIndex;
+                channels[native] = new DenonCalibrationChannel(native, native,
+                    level.Decibels, null, level.SpeakerIndex);
+            }
+            foreach (var distance in distances.Speakers)
+            {
+                var native = distance.Channel.HasValue && IsSingleChannel(distance.Channel.Value)
+                    ? ChannelName(distance.Channel.Value) : "DISTANCE#" + distance.SpeakerIndex;
+                if (channels.TryGetValue(native, out var value))
+                    channels[native] = value with { DistanceMeters = distance.Meters,
+                        DistanceIndex = distance.SpeakerIndex };
+                else
+                    channels[native] = new DenonCalibrationChannel(native, native, null,
+                        distance.Meters, null, distance.SpeakerIndex);
+            }
+            return new DenonSpeakerCalibrationSnapshot("Modern speaker AJAX", DateTimeOffset.UtcNow,
+                channels.Values.OrderBy(x => x.NativeChannelCode).ToArray());
+        }
+
+        // No model-specific mapping: dynamically check the actual legacy web pages.
+        var legacy = await GetLegacySpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var level in legacy.Levels)
+            channels.Add(level.NativeChannelCode, new DenonCalibrationChannel(
+                level.NativeChannelCode, level.DisplayName, level.Decibels, null));
+        foreach (var distance in legacy.Distances)
+        {
+            if (channels.TryGetValue(distance.NativeChannelCode, out var value))
+                channels[distance.NativeChannelCode] = value with { DistanceMeters = distance.Meters };
+            else channels.Add(distance.NativeChannelCode, new DenonCalibrationChannel(
+                distance.NativeChannelCode, distance.DisplayName, null, distance.Meters));
+        }
+        return new DenonSpeakerCalibrationSnapshot("Legacy speaker HTML", DateTimeOffset.UtcNow,
+            channels.Values.OrderBy(x => x.NativeChannelCode).ToArray());
+    }
+
+    private static bool IsSingleChannel(SpeakerChannel channel)
+    {
+        var bits = (ulong)channel;
+        return bits != 0 && (bits & (bits - 1)) == 0;
+    }
+
+    private static string ChannelName(SpeakerChannel channel) =>
+        SpeakerChannelParser.ToNativeCode(channel);
+
+    /// <summary>
+    /// Sends a family-button command and then reads MS? to expose the actual mode.
+    /// For example MSGAME may legitimately resolve to MSDTS NEO:X G.
+    /// </summary>
+    public async Task<DenonSoundModeSelectionResult> SelectSoundModeFamilyAndReadBackAsync(
+        DenonSoundModeFamily family, CancellationToken cancellationToken = default)
+    {
+        var response = await SelectSoundModeFamilyAsync(family, cancellationToken).ConfigureAwait(false);
+        var current = await _telnetClient.QuerySurroundModeAsync(cancellationToken).ConfigureAwait(false);
+        return new DenonSoundModeSelectionResult(family, response, current);
+    }
+
+    /// <summary>
+    /// Receiver-advertised Main Zone mode catalog. This is NOT a signal-dependent
+    /// Movie/Music/Game submenu; unlike OPSMLALL it works on legacy receivers.
+    /// </summary>
+    public IReadOnlyList<DenonAdvertisedSoundMode> GetAdvertisedSoundModeCatalog() =>
+        DeviceCapabilities?.SoundModes ?? Array.Empty<DenonAdvertisedSoundMode>();
+
+    /// <summary>
+    /// Changes one persistent calibration LEVEL. On legacy receivers the write is
+    /// experimental and opt-in. The web form is rebuilt from a fresh GET; after
+    /// submission a second GET MUST confirm the requested value.
+    /// </summary>
+    public async Task SetCalibrationLevelAsync(string nativeChannelCode, double decibels,
+        bool allowExperimentalLegacyWrite = false,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        NetFrameworkCompat.ThrowIfNullOrWhiteSpace(nativeChannelCode, nameof(nativeChannelCode));
+        if (double.IsNaN(decibels) || double.IsInfinity(decibels) ||
+            decibels < -12 || decibels > 12 || Math.Abs(decibels * 2 - Math.Round(decibels * 2)) > 0.000001)
+            throw new ArgumentOutOfRangeException(nameof(decibels));
+        var profile = GetReceiverProfile();
+        if (profile.SupportsSpeakerPresetLevels && profile.SupportsSpeakerDistances)
+        {
+            var current = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
+            var channel = current.Channels.SingleOrDefault(x =>
+                string.Equals(x.NativeChannelCode, nativeChannelCode, StringComparison.OrdinalIgnoreCase));
+            if (channel is null || channel.LevelIndex is null)
+                throw new ArgumentException("Unknown persistent level channel or index.", nameof(nativeChannelCode));
+            await SetSpeakerPresetLevelAsync(channel.LevelIndex.Value, decibels, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            if (!allowExperimentalLegacyWrite)
+                throw new NotSupportedException("Legacy speaker form writes require explicit opt-in and a backup.");
+            var port = GetInitializedPort();
+            var path = DenonLegacySpeakerCalibrationReader.LevelsPath;
+            var originalHtml = await _httpTransport.GetStringAsync(Host, port, path, cancellationToken)
+                .ConfigureAwait(false);
+            var form = DenonLegacySpeakerCalibrationReader.BuildLevelForm(originalHtml,
+                nativeChannelCode, decibels);
+            _ = await _httpTransport.PostFormAsync(Host, port,
+                "/SETUP/SPEAKERS/LEVELS/s_speakersetup.asp", form, cancellationToken).ConfigureAwait(false);
+        }
+        if (!await VerifyCalibrationReadbackAsync(nativeChannelCode, decibels,
+                isDistance: false, cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("Level write attempted, but target value was NOT confirmed after three readbacks. " +
+                "The AVR may still have changed; read the current value before retrying.");
+    }
+
+    /// <summary>Changes a persistent distance in meters, with explicit legacy opt-in and readback.</summary>
+    public async Task SetCalibrationDistanceAsync(string nativeChannelCode, double meters,
+        bool allowExperimentalLegacyWrite = false,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        NetFrameworkCompat.ThrowIfNullOrWhiteSpace(nativeChannelCode, nameof(nativeChannelCode));
+        if (double.IsNaN(meters) || double.IsInfinity(meters) || meters <= 0 || meters > 18)
+            throw new ArgumentOutOfRangeException(nameof(meters));
+        var profile = GetReceiverProfile();
+        if (profile.SupportsSpeakerPresetLevels && profile.SupportsSpeakerDistances)
+        {
+            var current = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
+            var channel = current.Channels.SingleOrDefault(x =>
+                string.Equals(x.NativeChannelCode, nativeChannelCode, StringComparison.OrdinalIgnoreCase));
+            if (channel is null || channel.DistanceIndex is null)
+                throw new ArgumentException("Unknown persistent distance channel or index.", nameof(nativeChannelCode));
+            await SetSpeakerDistanceAsync(channel.DistanceIndex.Value, meters, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            if (!allowExperimentalLegacyWrite)
+                throw new NotSupportedException("Legacy distance form writes require explicit opt-in and a backup.");
+            var port = GetInitializedPort();
+            var path = DenonLegacySpeakerCalibrationReader.DistancesPath;
+            var originalHtml = await _httpTransport.GetStringAsync(Host, port, path, cancellationToken)
+                .ConfigureAwait(false);
+            var form = DenonLegacySpeakerCalibrationReader.BuildDistanceForm(originalHtml,
+                nativeChannelCode, meters);
+            _ = await _httpTransport.PostFormAsync(Host, port,
+                "/SETUP/SPEAKERS/DISTANCES/s_speakersetup.asp", form, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        if (!await VerifyCalibrationReadbackAsync(nativeChannelCode, meters,
+                isDistance: true, cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("Distance write attempted, but target value was NOT confirmed after three readbacks. " +
+                "The AVR may still have changed; read the current value before retrying.");
+    }
+
+    /// <summary>
+    /// Re-read the actual stored value up to three times. A POST/HTTP 200 alone
+    /// is not evidence that the receiver accepted a calibration change.
+    /// </summary>
+    private async Task<bool> VerifyCalibrationReadbackAsync(string nativeChannelCode,
+        double expected, bool isDistance, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (attempt > 0)
+                await Task.Delay(350, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var snapshot = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
+                var found = snapshot.Channels.SingleOrDefault(x =>
+                    string.Equals(x.NativeChannelCode, nativeChannelCode,
+                        StringComparison.OrdinalIgnoreCase));
+                var value = isDistance ? found?.DistanceMeters : found?.LevelDecibels;
+                if (value.HasValue && Math.Abs(value.Value - expected) <=
+                    (isDistance ? 0.035 : 0.01))
+                    return true;
+            }
+            catch (Exception ex) when (attempt < 2 &&
+                (ex is System.Net.Http.HttpRequestException || ex is IOException ||
+                 ex is InvalidDataException || ex is TimeoutException))
+            {
+                // A legacy receiver can be briefly unavailable while saving.
+            }
+        }
+        return false;
     }
 
     /// <summary>Reads the active speaker-preset levels using the selected receiver profile.</summary>
@@ -1213,13 +1683,13 @@ public sealed class DenonAvrClient : IDisposable
 
     private static DenonReceiverCapabilities CreateReceiverCapabilities(
         DenonDeviceInfo deviceInfo,
-        int httpPort)
+        bool supportsAppCommand)
     {
         var zoneCount = deviceInfo.ZoneCount;
         return new DenonReceiverCapabilities(
             SupportsHttp: true,
             SupportsTelnet: null,
-            SupportsAppCommand: httpPort == 8080,
+            SupportsAppCommand: supportsAppCommand,
             SupportsAppCommand0300: null,
             SupportsZone2: zoneCount is >= 2,
             SupportsZone3: zoneCount is >= 3,

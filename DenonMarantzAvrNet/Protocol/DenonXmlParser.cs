@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Xml;
 using System.Xml.Linq;
 using DenonMarantzAvrNet.Exceptions;
@@ -8,6 +8,16 @@ namespace DenonMarantzAvrNet.Protocol;
 
 internal static class DenonXmlParser
 {
+    /// <summary>True only when the HTTP response contains at least one usable AppCommand result.</summary>
+    internal static bool HasAppCommandData(string xml)
+    {
+        var root = ParseSecurely(xml).Root;
+        if (root is null || !NameEquals(root, "rx"))
+            return false;
+        return root.Elements().Any(element => NameEquals(element, "cmd") &&
+            (element.HasElements || !string.IsNullOrWhiteSpace(element.Value)));
+    }
+
     internal static DenonDeviceInfo ParseDeviceInfo(string xml)
     {
         var root = ParseSecurely(xml).Root;

@@ -10,6 +10,7 @@ internal interface IDenonReceiverProfile
 {
     string Id { get; }
     int SpeakerPresetCount { get; }
+    DenonSpeakerAjaxOptions? SpeakerDiscoveryOptions { get; }
     bool SupportsSpeakerPresetLevels { get; }
     bool SupportsSpeakerDistances { get; }
     bool SupportsSpeakerPresetSelection { get; }
