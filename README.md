@@ -191,16 +191,15 @@ await receiver.SetSpeakerLevelOffAsync(DenonSpeakerLevelChannel.Subwoofer2); // 
 
 During `InitializeAsync()` the library selects a receiver profile from the reported model name (`X6800` or `X6700`). Receivers on port `80` that are not recognized get the `legacy-goform` profile; all others get `unknown`. These two profiles have no speaker web interface support.
 
-If your receiver is a similar model that is not recognized, you can test it with the profile of a supported model:
+For receivers without a verified profile, keep the automatically detected `legacy-goform` or `unknown` profile. Do not force an X6700H or X6800H profile onto an AVR-X4100W: this would enable unverified speaker-setup HTTP calls.
 
 ```csharp
 await receiver.InitializeAsync();
-
-if (receiver.ReceiverProfileId is "unknown" or "legacy-goform")
-{
-    receiver.SelectReceiverProfile("avc-x6700h"); // or "avc-x6800h"
-}
+Console.WriteLine($"Detected profile: {receiver.ReceiverProfileId}");
+// Leave the automatically detected profile unchanged.
 ```
+
+For deliberate compatibility tests on a *verified similar model*, a profile override remains available through `SelectReceiverProfile()`; do not use it for the AVR-X4100W without proof that it implements the chosen profile's endpoints.
 
 The override stays active until the next successful `InitializeAsync()`. An unsupported profile ID throws an `ArgumentException`.
 
@@ -429,7 +428,7 @@ Start `DenonMarantzAvrNet.TesterGui` from Visual Studio or run the built executa
 - Detail queries are sequential; parallel access is avoided.
 - The input list is loaded separately and cached in the client.
 - The AVC-X6800H requires a CRLF after the XML declaration. Without it, the receiver returns HTTP 200 with an empty `<rx>` element.
-- Telnet commands use one short-lived TCP connection each (port `23`); multi-line responses such as `CV?` are read until their terminating `CVEND` line.
+- Telnet commands and event monitoring share a persistent session on port `23`; multi-line responses such as `CV?` are read until their terminating `CVEND` line.
 - Do not use `DenonAvrClient` concurrently through multiple parallel `UpdateAsync()` calls.
 
 Further details are available in the [API documentation](docs/API.md), [protocol notes](docs/PROTOCOL.md), and [device-testing guide](docs/DEVICE-TESTING.md).
@@ -441,7 +440,8 @@ Further details are available in the [API documentation](docs/API.md), [protocol
 - Events are received through a permanently open Telnet connection; custom event handlers should not perform long-running work.
 - Receiver-specific web features use an internal profile selected during `InitializeAsync()`. The selected profile is exposed as `ReceiverProfileId` for diagnostics, and can be replaced with `SelectReceiverProfile()` for similar models.
 - Speaker-preset levels, speaker distances, and HTTP speaker-preset selection are implemented for both the AVC-X6800H and AVC-X6700H through receiver-specific AJAX profiles. The X6800H uses HTTP/11080; the X6700H uses HTTPS/10443 and an explicitly scoped local-device certificate exception. Legacy and unknown profiles currently report zero known presets and no web speaker-setup support.
-- Manual profile selection only offers the X6800H and X6700H profiles.
+- The tester offers automatic recognition by default, plus explicit X6800H, X6700H, generic Legacy (GoForm) and Unknown selections. Legacy is not a dedicated AVR-X4100W profile.
+- If the tester raises `MissingMethodException` for `DenonAvrClient.AppCommandPort`, rebuild the library and tester together from the same source; see [DLL compatibility troubleshooting](docs/DLL_COMPATIBILITY.md).
 
 ## Help the project
 
@@ -452,3 +452,10 @@ Run **Check receiver compatibility...** in the tester application with your rece
 The implementation was inspired by [`ol-iver/denonavr`](https://github.com/ol-iver/denonavr). The original reference version is based on commit `98566b286efab12496ef623eda498db8bcb5ea09` (`1.4.0-dev`).
 
 License and provenance notices are in [LICENSE.txt](LICENSE.txt) and [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+### WPF runtime assembly check (2026-10-20)
+
+The tester keeps `DenonMarantzAvrNet.dll` separate from the Costura-embedded third-party libraries.
+It verifies `AppCommandPort` and `AppCommand0300Port` getters during startup and, if either
+is missing, shows the identity and physical path of the loaded library instead of throwing
+`MissingMethodException` during a support report. This is a binary/API integrity check,
+not a change in the receiver protocol. See `docs/DLL_COMPATIBILITY.md`.

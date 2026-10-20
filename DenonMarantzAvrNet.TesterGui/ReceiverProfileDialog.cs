@@ -48,7 +48,7 @@ namespace DenonMarantzAvrNet.TesterGui
             });
             _cmbProfile.Items.Add(new ComboBoxItem { Content = "AVC-X6800H", Tag = "avc-x6800h" });
             _cmbProfile.Items.Add(new ComboBoxItem { Content = "AVC-X6700H", Tag = "avc-x6700h" });
-            _cmbProfile.Items.Add(new ComboBoxItem { Content = "Legacy / AVR-X4100W", Tag = "legacy-goform" });
+            _cmbProfile.Items.Add(new ComboBoxItem { Content = "Legacy (GoForm, generisch)", Tag = "legacy-goform" });
             _cmbProfile.Items.Add(new ComboBoxItem { Content = "Unknown / generisch", Tag = "unknown" });
 
             _lblReceiverType = new TextBlock
