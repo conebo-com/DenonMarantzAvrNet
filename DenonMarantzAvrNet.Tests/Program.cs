@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
@@ -33,7 +33,10 @@ internal static class Program
             TestReadOnlyTransportAndPartialFailures();
             TestTelnetResponseCorrelation();
             TestExactModeRestoration();
+            TestFamilyConfirmationIsNotJustAnyMsStatus();
             TestTelnetLoopbackSession();
+            TestFamilySetWithoutAcknowledgement();
+            TestTimeoutDisconnectsOldTelnetSession();
             TestReceiverProfileSelection();
             TestSpeakerTransportIgnoresForcedCompatibilityProfile();
             TestCombinedSpeakerGroupClassification();
@@ -55,7 +58,7 @@ internal static class Program
             TestLegacyCalibrationGetOnly();
             TestUnifiedCalibrationPayloads();
             TestCanonicalSpeakerChannelCodes();
-            Console.WriteLine("Discovery/transport: 30 tests passed.");
+            Console.WriteLine("Discovery/transport: 33 tests passed.");
             return 0;
         }
         catch (Exception exception)
@@ -116,6 +119,42 @@ internal static class Program
         Check(!DenonTelnetResponseMatcher.IsExactSoundModeStatus("MS?", "MSSTEREO") &&
               !DenonTelnetResponseMatcher.IsExactSoundModeStatus("", "MSSTEREO"),
             "Empty or query-only mode is not a valid original sound mode.");
+    }
+
+    private static void TestFamilyConfirmationIsNotJustAnyMsStatus()
+    {
+        Check(DenonSoundModeFamilyVerifier.GetCommand(DenonSoundModeFamily.Movie) == "MSMOVIE" &&
+            DenonSoundModeFamilyVerifier.GetCommand(DenonSoundModeFamily.PureDirect) == "MSPURE DIRECT",
+            "Remote-family command mapping must remain stable.");
+        Check(DenonSoundModeFamilyVerifier.IsMatchingFamilyNotification(
+            DenonSoundModeFamily.Movie, "SSSMG MOV") &&
+            !DenonSoundModeFamilyVerifier.IsMatchingFamilyNotification(
+                DenonSoundModeFamily.Movie, "SSSMG GAM"),
+            "Do not confuse matching with unrelated family telemetry.");
+        Check(DenonSoundModeFamilyVerifier.Evaluate(DenonSoundModeFamily.Movie,
+            "MSSTEREO", "MSDOLBY SURROUND", true) == DenonSoundModeVerification.Confirmed,
+            "A matching family notification plus MS readback confirms Movie.");
+        Check(DenonSoundModeFamilyVerifier.Evaluate(DenonSoundModeFamily.Game,
+            "MSSTEREO", "MSDOLBY SURROUND", false) ==
+            DenonSoundModeVerification.ModeChangedFamilyUnconfirmed,
+            "A changed codec alone must not prove the requested Game family.");
+        Check(DenonSoundModeFamilyVerifier.Evaluate(DenonSoundModeFamily.Music,
+            "MSSTEREO", "MSSTEREO", false) == DenonSoundModeVerification.Unchanged,
+            "An unchanged codec without an event must not count as confirmed Music.");
+        Check(DenonSoundModeFamilyVerifier.Evaluate(DenonSoundModeFamily.Music,
+            "MSSTEREO", "MSSTEREO", true) == DenonSoundModeVerification.Confirmed,
+            "The requested family can be selected while retaining the same codec.");
+        Check(DenonSoundModeFamilyVerifier.Evaluate(DenonSoundModeFamily.Direct,
+            "MSSTEREO", "MSDIRECT", false) == DenonSoundModeVerification.Confirmed &&
+            DenonSoundModeFamilyVerifier.Evaluate(DenonSoundModeFamily.PureDirect,
+            "MSDIRECT", "MSPURE DIRECT", false) == DenonSoundModeVerification.Confirmed,
+            "Exact MS status is sufficient for Direct/Pure Direct.");
+        Check(DenonSoundModeFamilyVerifier.Evaluate(DenonSoundModeFamily.PureDirect,
+            "MSDIRECT", "MSDIRECT", true) != DenonSoundModeVerification.Confirmed,
+            "SSSMG PUR alone cannot distinguish Direct from Pure Direct.");
+        Check(DenonSoundModeFamilyVerifier.Evaluate(DenonSoundModeFamily.Movie,
+            "MSSTEREO", "", true) == DenonSoundModeVerification.Unverified,
+            "An SSSMG notification does not substitute for a fresh MS? status.");
     }
 
     private static void TestCanonicalSpeakerChannelCodes()
@@ -431,6 +470,104 @@ internal static class Program
                 "Unsolicited status and MVMAX must not be used as command replies.");
             Check(cv.SequenceEqual(new[] { "CVFL 50", "CVFR 50", "CVEND" }),
                 "CV? must collect only channel lines through CVEND.");
+            server.GetAwaiter().GetResult();
+        }
+        finally { listener.Stop(); }
+    }
+
+    private static void TestFamilySetWithoutAcknowledgement()
+    {
+        // The X6700H may send a family event but no direct MS SET response.
+        // Verify that the command can be sent and MS? still works on ONE socket.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var server = Task.Run(async () =>
+            {
+                using (var client = await listener.AcceptTcpClientAsync())
+                using (var stream = client.GetStream())
+                {
+                    Check(await ReadAsciiCommandAsync(stream) == "MSMOVIE",
+                        "Family SET must be sent first.");
+                    await WriteLinesAsync(stream, "SSSMG MOV");
+                    Check(await ReadAsciiCommandAsync(stream) == "MS?",
+                        "A SET command with no MS echo must still allow MS? verification.");
+                    await WriteLinesAsync(stream, "MSDOLBY SURROUND");
+                    Check(await ReadAsciiCommandAsync(stream) == "PW?",
+                        "No-echo family SET must not poison subsequent Telnet correlation.");
+                    await WriteLinesAsync(stream, "PWON");
+                }
+            });
+            var session = DenonTelnetSession.ForEndpoint("127.0.0.1", port);
+            var timeout = TimeSpan.FromSeconds(4);
+            string? notification = null;
+            Action<DenonTelnetEvent> handler = received =>
+            {
+                if (DenonSoundModeFamilyVerifier.IsMatchingFamilyNotification(
+                    DenonSoundModeFamily.Movie, received.Message))
+                    notification = received.Message;
+            };
+            session.LineReceived += handler;
+            try
+            {
+                session.SendWithoutResponseAsync("MSMOVIE", timeout, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                var ms = session.ExecuteAsync("MS?", null, timeout, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                var power = session.ExecuteAsync("PW?", null, timeout, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                Check(ms.SequenceEqual(new[] { "MSDOLBY SURROUND" }) &&
+                    power.SequenceEqual(new[] { "PWON" }) && notification == "SSSMG MOV",
+                    "Family events and actual mode status must be independent observations.");
+            }
+            finally { session.LineReceived -= handler; }
+            server.GetAwaiter().GetResult();
+        }
+        finally { listener.Stop(); }
+    }
+
+    private static void TestTimeoutDisconnectsOldTelnetSession()
+    {
+        // A receiver that never acknowledges SET must not leave its old pending
+        // request (or an old reader) associated with the next MS? query.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var server = Task.Run(async () =>
+            {
+                using (var first = await listener.AcceptTcpClientAsync())
+                using (var stream = first.GetStream())
+                {
+                    Check(await ReadAsciiCommandAsync(stream) == "MSMUSIC", "Timeout setup failed.");
+                    // A TCP read on this connection should be terminated by the client timeout.
+                    var data = new byte[1];
+                    try { await stream.ReadAsync(data, 0, 1); }
+                    catch (IOException) { /* Expected when the timed-out socket is reset. */ }
+                }
+                using (var second = await listener.AcceptTcpClientAsync())
+                using (var stream = second.GetStream())
+                {
+                    Check(await ReadAsciiCommandAsync(stream) == "MS?", "Recovery query missing.");
+                    await WriteLinesAsync(stream, "MSSTEREO");
+                }
+            });
+            var session = DenonTelnetSession.ForEndpoint("127.0.0.1", port);
+            try
+            {
+                session.ExecuteAsync("MSMUSIC", null, TimeSpan.FromMilliseconds(200),
+                    CancellationToken.None).GetAwaiter().GetResult();
+                throw new Exception("A SET without an acknowledgement must time out.");
+            }
+            catch (OperationCanceledException) { }
+            catch (IOException) { }
+            var ms = session.ExecuteAsync("MS?", null, TimeSpan.FromSeconds(5),
+                CancellationToken.None).GetAwaiter().GetResult();
+            Check(ms.SequenceEqual(new[] { "MSSTEREO" }),
+                "A timed-out pending SET must not consume the next status response.");
             server.GetAwaiter().GetResult();
         }
         finally { listener.Stop(); }

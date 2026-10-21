@@ -122,6 +122,47 @@ internal sealed class DenonTelnetSession
         }
     }
 
+    /// <summary>
+    /// Sends a state-changing command without inventing an acknowledgement.
+    /// Some receivers (including AVC-X6700H in field testing) switch their
+    /// Movie/Music/Game family but never echo an MS status for the SET command.
+    /// The caller must query and verify the resulting state separately.
+    /// </summary>
+    internal async Task SendWithoutResponseAsync(string command, TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using (var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        {
+            timeoutSource.CancelAfter(timeout);
+            var token = timeoutSource.Token;
+            await _commandGate.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                await EnsureConnectedAsync(token).ConfigureAwait(false);
+                TcpClient client;
+                lock (_sync)
+                    client = _client ?? throw new IOException("Telnet-Verbindung ist nicht verfügbar.");
+                using (token.Register(() => DropConnection(client)))
+                {
+                    try
+                    {
+                        var bytes = Encoding.ASCII.GetBytes(command + "\r");
+                        await client.GetStream().WriteAsync(bytes, 0, bytes.Length, token)
+                            .ConfigureAwait(false);
+                        await client.GetStream().FlushAsync(token).ConfigureAwait(false);
+                        ReceiverLogger.Write("TELNET", "TX " + command);
+                    }
+                    catch
+                    {
+                        DropConnection(client);
+                        throw;
+                    }
+                }
+            }
+            finally { _commandGate.Release(); }
+        }
+    }
+
     private async Task ReadLoopAsync(TcpClient client)
     {
         Exception? failure = null;
@@ -143,7 +184,7 @@ internal sealed class DenonTelnetSession
                     if (b == 13 || b == 10)
                     {
                         if (line.Length == 0) continue;
-                        DispatchLine(line.ToString().Trim());
+                        DispatchLine(client, line.ToString().Trim());
                         line.Clear();
                     }
                     else
@@ -164,13 +205,17 @@ internal sealed class DenonTelnetSession
         }
     }
 
-    private void DispatchLine(string line)
+    private void DispatchLine(TcpClient source, string line)
     {
         if (line.Length == 0) return;
+        // A retired reader may still finish a buffered read after its socket
+        // has been dropped on timeout. It must never satisfy a new request.
+        lock (_sync)
+        {
+            if (!ReferenceEquals(_client, source)) return;
+            _pending?.Receive(line);
+        }
         ReceiverLogger.Write("TELNET", "RX " + line);
-        PendingRequest? pending;
-        lock (_sync) { pending = _pending; }
-        pending?.Receive(line);
         // Events can contain unsolicited lines or status returned by commands.
         try { LineReceived?.Invoke(new DenonTelnetEvent(DateTimeOffset.UtcNow, line)); }
         catch (Exception exception) { Error?.Invoke(exception); }

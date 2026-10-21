@@ -69,3 +69,11 @@ verified without readback, and a successful HTTP POST does not establish persist
 The setter now retries live readback up to three times to tolerate delayed device
 updates. Distance writing remains guarded/experimental on legacy units until a
 real changed distance has been confirmed and restored.
+
+## Updated sound-mode readback for AVC-X6700H (2026-10-21)
+
+Some modern receivers change the Movie/Music/Game family without echoing an `MS`
+response to the SET command. `SelectSoundModeFamilyAndReadBackAsync` no longer waits
+for that echo. `MS?` is polled and `SSSMG MOV/MUS/GAM` is observed independently;
+see [X6700H-SOUNDMODE-ACK-FIX.md](X6700H-SOUNDMODE-ACK-FIX.md) for the status
+classifications and the WPF targeted one-pass test.

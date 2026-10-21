@@ -1,3 +1,12 @@
+﻿## Unreleased – Sound-mode family acknowledgement and recovery (2026-10-21)
+
+- Send Movie/Music/Game/Direct/Pure Direct family commands without assuming the AVR will echo an `MS` SET acknowledgement; perform repeated `MS?` readback instead.
+- Track `SSSMG MOV/MUS/GAM` family messages separately from the actual MS playback mode and classify confirmed, changed-but-unconfirmed, unchanged or unavailable results.
+- Restore the original MS sound mode with a send-only command and exact MS? verification, including bounded retry and explicit warnings.
+- Harden the shared Telnet reader against stale lines from a previously disconnected socket after timeout.
+- Add offline family-verification and TCP loopback tests, update the WPF tester and document AVC-X6700H observations.
+- Leave existing speaker calibration providers and the .NET Framework 4.8 target unchanged.
+
 ## Unreleased – X6700H cross-profile compatibility (2026-10-21)
 
 - Fix profile-forced legacy mode incorrectly disabling AVC-X6700H speaker preset, levels and distance APIs despite the physical receiver exposing the modern AJAX transport.

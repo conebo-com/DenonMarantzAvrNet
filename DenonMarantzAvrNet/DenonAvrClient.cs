@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Net.Sockets;
 using System.Net.Http;
 using DenonMarantzAvrNet.Protocol;
@@ -1032,8 +1032,11 @@ public sealed class DenonAvrClient : IDisposable
         ThrowIfDisposed();
         if (ReceiverCapabilities?.SupportsTelnet == false)
             throw new NotSupportedException("Telnet is not available for this receiver.");
-        return await _telnetClient.SelectSoundModeFamilyAsync(family, cancellationToken)
+        var selected = await SelectSoundModeFamilyAndReadBackAsync(family, cancellationToken)
             .ConfigureAwait(false);
+        if (!selected.HasModeStatus)
+            throw new IOException("Sound mode family command was sent, but MS? could not verify the current mode.");
+        return selected.CurrentModeResponse;
     }
 
     /// <summary>
@@ -1174,9 +1177,62 @@ public sealed class DenonAvrClient : IDisposable
     public async Task<DenonSoundModeSelectionResult> SelectSoundModeFamilyAndReadBackAsync(
         DenonSoundModeFamily family, CancellationToken cancellationToken = default)
     {
-        var response = await SelectSoundModeFamilyAsync(family, cancellationToken).ConfigureAwait(false);
-        var current = await _telnetClient.QuerySurroundModeAsync(cancellationToken).ConfigureAwait(false);
-        return new DenonSoundModeSelectionResult(family, response, current);
+        ThrowIfDisposed();
+        if (ReceiverCapabilities?.SupportsTelnet == false)
+            throw new NotSupportedException("Telnet is not available for this receiver.");
+
+        // The AVC-X6700H may perform MSMOVIE/MSMUSIC/MSGAME without echoing MS.
+        // Observe SSSMG independently and verify via MS?; do not require a SET echo.
+        string previous = string.Empty;
+        try { previous = await _telnetClient.QuerySurroundModeAsync(cancellationToken).ConfigureAwait(false); }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested &&
+            (ex is IOException || ex is OperationCanceledException)) { }
+
+        var session = DenonTelnetSession.ForHost(Host);
+        string? familyEvent = null;
+        Action<DenonTelnetEvent> onLine = received =>
+        {
+            if (DenonSoundModeFamilyVerifier.IsMatchingFamilyNotification(family, received.Message))
+                Volatile.Write(ref familyEvent, received.Message);
+        };
+        session.LineReceived += onLine;
+        string actual = string.Empty;
+        try
+        {
+            await _telnetClient.SendSoundModeFamilyWithoutAckAsync(family, cancellationToken)
+                .ConfigureAwait(false);
+            // Let receivers with asynchronous family selection settle before asking.
+            await Task.Delay(400, cancellationToken).ConfigureAwait(false);
+            for (var attempt = 0; attempt < 6; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var reply = await _telnetClient.QuerySurroundModeAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (DenonSoundModeFamilyVerifier.IsModeStatus(reply)) actual = reply;
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested &&
+                    (ex is IOException || ex is OperationCanceledException)) { }
+
+                var grade = DenonSoundModeFamilyVerifier.Evaluate(
+                    family, previous, actual, Volatile.Read(ref familyEvent) is not null);
+                if (grade == DenonSoundModeVerification.Confirmed) break;
+                if (attempt < 5) await Task.Delay(350, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally { session.LineReceived -= onLine; }
+
+        var notification = Volatile.Read(ref familyEvent);
+        return new DenonSoundModeSelectionResult(family,
+            DenonSoundModeFamilyVerifier.GetCommand(family) + " (sent; no SET acknowledgement assumed)",
+            actual)
+        {
+            PreviousModeResponse = previous,
+            FamilyNotification = notification,
+            Verification = DenonSoundModeFamilyVerifier.Evaluate(
+                family, previous, actual, notification is not null)
+        };
     }
 
     /// <summary>

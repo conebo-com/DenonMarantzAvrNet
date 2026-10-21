@@ -201,20 +201,31 @@ public sealed class DenonTelnetClient
     /// remote buttons. The receiver decides which mode is applicable to the input.
     /// No assumption is made that the command cycles or that all families are supported.
     /// </summary>
-    public Task<string> SelectSoundModeFamilyAsync(
+    public async Task<string> SelectSoundModeFamilyAsync(
         DenonSoundModeFamily family, CancellationToken cancellationToken = default)
     {
-        string command;
-        switch (family)
-        {
-            case DenonSoundModeFamily.Movie: command = "MSMOVIE"; break;
-            case DenonSoundModeFamily.Music: command = "MSMUSIC"; break;
-            case DenonSoundModeFamily.Game: command = "MSGAME"; break;
-            case DenonSoundModeFamily.Direct: command = "MSDIRECT"; break;
-            case DenonSoundModeFamily.PureDirect: command = "MSPURE DIRECT"; break;
-            default: throw new ArgumentOutOfRangeException(nameof(family));
-        }
-        return SendCommandAsync(command, cancellationToken);
+        // A successful TCP write does NOT mean the AVR applied the family.
+        // Read the actual status instead of waiting for an optional SET echo.
+        await SendSoundModeFamilyWithoutAckAsync(family, cancellationToken).ConfigureAwait(false);
+        await Task.Delay(400, cancellationToken).ConfigureAwait(false);
+        return await QuerySurroundModeAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Send a listening-family command; the caller verifies MS? separately.</summary>
+    internal Task SendSoundModeFamilyWithoutAckAsync(
+        DenonSoundModeFamily family, CancellationToken cancellationToken = default) =>
+        DenonTelnetSession.ForHost(Host).SendWithoutResponseAsync(
+            DenonSoundModeFamilyVerifier.GetCommand(family), _timeout, cancellationToken);
+
+    /// <summary>Send a specific MS mode for best-effort restore; caller verifies MS?.</summary>
+    public Task SendSurroundModeWithoutAckAsync(
+        string mode, CancellationToken cancellationToken = default)
+    {
+        NetFrameworkCompat.ThrowIfNullOrWhiteSpace(mode, nameof(mode));
+        if (mode.Contains('\r') || mode.Contains('\n'))
+            throw new ArgumentException("Der Soundmodus darf keinen Zeilenumbruch enthalten.", nameof(mode));
+        return DenonTelnetSession.ForHost(Host).SendWithoutResponseAsync(
+            "MS" + mode.Trim(), _timeout, cancellationToken);
     }
 
     /// <summary>

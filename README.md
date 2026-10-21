@@ -1,4 +1,4 @@
-# DenonMarantzAvrNet
+﻿# DenonMarantzAvrNet
 
 `DenonMarantzAvrNet` is an asynchronous C# library for controlling compatible Denon and Marantz AV receivers through their local HTTP/XML and Telnet interfaces. The repository also contains a WPF tester application for trying out the library against a real receiver.
 
@@ -522,3 +522,15 @@ restored `MS?` mode explicitly.
 ### Cross-profile AVC-X6700H compatibility (2026-10-21)
 
 Calibration access now chooses the device-detected physical speaker protocol, not a user-forced compatibility profile; see [X6700H cross-profile report](docs/X6700H-CROSS-PROFILE-COMPATIBILITY.md). The native speaker matrix and currently active audio channels are reported separately, and the dual-subwoofer aggregate is not a physical calibration channel.
+
+### X6700H sound-family SET acknowledgement fix (2026-10-21)
+
+A successful Movie/Music/Game family command need not produce an immediate `MS` SET
+acknowledgement. The `SelectSoundModeFamilyAndReadBackAsync` API sends the family
+command, separately monitors `SSSMG MOV/MUS/GAM`, polls `MS?`, and returns a
+`DenonSoundModeSelectionResult.Verification` classification. `ModeChangedFamilyUnconfirmed`
+means the playback mode changed but the chosen family was **not** independently
+confirmed; an unchanged codec without a family event is also inconclusive.
+The one-pass WPF action prints each classification and verifies restoration using an
+exact `MS?` match. See [Sound-mode verification fix](docs/X6700H-SOUNDMODE-ACK-FIX.md).
+No speaker calibration or profile transport code was changed.

@@ -498,8 +498,12 @@ namespace DenonMarantzAvrNet.TesterGui
                         var selection = await Client.SelectSoundModeFamilyAndReadBackAsync(
                             (DenonSoundModeFamily)Enum.Parse(typeof(DenonSoundModeFamily),
                                 input.Parameter1.Trim(), ignoreCase: true), Token);
-                        return "Receiver response: " + selection.CommandResponse + Environment.NewLine +
-                            "Actual mode (MS?): " + selection.CurrentModeResponse;
+                        return "Command: " + selection.CommandResponse + Environment.NewLine +
+                            "Previous mode: " + selection.PreviousModeResponse + Environment.NewLine +
+                            "Family event: " + (selection.FamilyNotification ?? "(none)") + Environment.NewLine +
+                            "Actual mode (MS?): " + (selection.HasModeStatus ?
+                                selection.CurrentModeResponse : "(unavailable)") + Environment.NewLine +
+                            "Verification: " + selection.Verification;
                     }),
                 new(audioGroup, Loc.Get("Digital input decoder"), false, [new(Loc.Get("Mode (Auto, PCM, DTS)"), "Auto")],
                     input => TelnetResponseAsync(Telnet.SetDigitalInputModeAsync(input.Parameter1, Token))),
@@ -688,8 +692,16 @@ namespace DenonMarantzAvrNet.TesterGui
                     try
                     {
                         var selection = await Client.SelectSoundModeFamilyAndReadBackAsync(family, Token);
-                        output.AppendLine($"{family,-11} response={selection.CommandResponse}; " +
-                            "actual=" + selection.CurrentModeResponse);
+                        output.AppendLine($"{family,-11} command={selection.CommandResponse}; " +
+                            "actual=" + (selection.HasModeStatus ? selection.CurrentModeResponse : "(no MS? status)"));
+                        output.AppendLine("             verification=" + selection.Verification +
+                            "; SSSMG=" + (selection.FamilyNotification ?? "(none)"));
+                        if (selection.Verification == DenonSoundModeVerification.Unchanged)
+                            output.AppendLine("             INFO: mode unchanged; family selection not confirmed.");
+                        else if (selection.Verification == DenonSoundModeVerification.ModeChangedFamilyUnconfirmed)
+                            output.AppendLine("             INFO: MS status changed, but requested family not confirmed.");
+                        else if (selection.Verification == DenonSoundModeVerification.Unverified)
+                            output.AppendLine("             WARNING: No conclusive sound-mode verification.");
                     }
                     catch (Exception ex) when (IsExpectedError(ex))
                     {
@@ -705,23 +717,32 @@ namespace DenonMarantzAvrNet.TesterGui
                 {
                     try
                     {
-                        var restored = await Telnet.SetSurroundModeAsync(oldResponse.Substring(2),
+                        // Do not require a SET acknowledgement during recovery: the
+                        // X6700H may restore its state without echoing the command.
+                        await Telnet.SendSurroundModeWithoutAckAsync(oldResponse.Substring(2),
                             CancellationToken.None);
-                        string actual = "(no status)";
+                        string actual = "(no MS? status)";
                         var confirmed = false;
-                        for (var attempt = 0; attempt < 3; attempt++)
+                        for (var attempt = 0; attempt < 6; attempt++)
                         {
                             if (attempt > 0)
-                                await Task.Delay(250, CancellationToken.None);
-                            actual = await Telnet.QuerySurroundModeAsync(CancellationToken.None);
-                            if (DenonSoundModeSelectionResult.IsSameModeStatus(
-                                oldResponse, actual))
+                                await Task.Delay(350, CancellationToken.None);
+                            try
                             {
-                                confirmed = true;
-                                break;
+                                actual = await Telnet.QuerySurroundModeAsync(CancellationToken.None);
+                                if (DenonSoundModeSelectionResult.IsSameModeStatus(
+                                    oldResponse, actual))
+                                {
+                                    confirmed = true;
+                                    break;
+                                }
+                            }
+                            catch (Exception ex) when (IsExpectedError(ex))
+                            {
+                                actual = "(MS? failed: " + ex.GetType().Name + ")";
                             }
                         }
-                        output.AppendLine("Restore command: " + restored + "; actual=" + actual);
+                        output.AppendLine("Restore command sent: " + oldResponse + "; actual=" + actual);
                         output.AppendLine(confirmed ? "RESTORE VERIFIED: original MS status matches." :
                             "WARNING: RESTORE NOT VERIFIED. Check the receiver manually.");
                     }
