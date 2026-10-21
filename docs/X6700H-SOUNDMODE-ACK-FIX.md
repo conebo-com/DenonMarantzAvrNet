@@ -70,3 +70,15 @@ distances remains a separate unverified hardware test.
 
 The project remains `net48`. A Windows SDK build and live receiver verification are
 required to confirm the new behavior; source-level/ZIP/patch checks are not a build.
+
+## Follow-up hardware observation: first MOVIE press
+
+On AVC-X6700H, the user observed that the first press of MOVIE on the physical
+remote can leave `MSSTEREO` active while opening the on-screen sound-mode list;
+subsequent presses cycle through available entries. A one-pass test yielded
+`MSMOVIE` / `MSSTEREO` without `SSSMG MOV`, so this remains **Unchanged / not
+confirmed**, not a failure to send the command and not positive proof of family
+selection. The WPF tester now explains this possibility only for Movie. It does
+not automatically send MOVIE twice, since doing so could change playback mode.
+The other observed results were Music and Game with matching SSSMG events,
+Direct and Pure Direct with exact MS statuses, and exact Stereo restoration.

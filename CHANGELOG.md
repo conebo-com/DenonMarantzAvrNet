@@ -1,5 +1,7 @@
-﻿## Unreleased – Sound-mode family acknowledgement and recovery (2026-10-21)
+﻿﻿## Unreleased – Sound-mode family acknowledgement and recovery (2026-10-21)
 
+- Clarify X6700H first-MOVIE-press overlay behavior in WPF one-pass diagnostics without declaring Movie confirmed or sending a second press.
+- Clarify X6700H first-MOVIE-press overlay behavior in WPF one-pass diagnostics without declaring Movie confirmed or sending a second press.
 - Send Movie/Music/Game/Direct/Pure Direct family commands without assuming the AVR will echo an `MS` SET acknowledgement; perform repeated `MS?` readback instead.
 - Track `SSSMG MOV/MUS/GAM` family messages separately from the actual MS playback mode and classify confirmed, changed-but-unconfirmed, unchanged or unavailable results.
 - Restore the original MS sound mode with a send-only command and exact MS? verification, including bounded retry and explicit warnings.

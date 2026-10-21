@@ -697,7 +697,11 @@ namespace DenonMarantzAvrNet.TesterGui
                         output.AppendLine("             verification=" + selection.Verification +
                             "; SSSMG=" + (selection.FamilyNotification ?? "(none)"));
                         if (selection.Verification == DenonSoundModeVerification.Unchanged)
+                        {
                             output.AppendLine("             INFO: mode unchanged; family selection not confirmed.");
+                            if (family == DenonSoundModeFamily.Movie)
+                                output.AppendLine("             NOTE: On AVC-X6700H, the first MOVIE press may only open the on-screen mode list while Stereo remains active. This does not verify Movie selection; no automatic second press is sent.");
+                        }
                         else if (selection.Verification == DenonSoundModeVerification.ModeChangedFamilyUnconfirmed)
                             output.AppendLine("             INFO: MS status changed, but requested family not confirmed.");
                         else if (selection.Verification == DenonSoundModeVerification.Unverified)
