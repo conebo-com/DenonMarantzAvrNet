@@ -1,4 +1,14 @@
-﻿## Unreleased - priority sound / speaker diagnostics
+## Unreleased – X6700H cross-profile compatibility (2026-10-21)
+
+- Fix profile-forced legacy mode incorrectly disabling AVC-X6700H speaker preset, levels and distance APIs despite the physical receiver exposing the modern AJAX transport.
+- Resolve physical speaker transport independently from the user-selected compatibility profile; known X6700H/X6800H transport behavior takes precedence. Unknown API-0301 receivers can try bounded, read-only modern AJAX probes before using a legacy fallback. No unsupported endpoint is classified as confirmed.
+- Remove combined/multi-speaker group controls (notably the dual-subwoofer aggregate) from the unified list of individual speakers. Preserve the raw entry via the separate preset-level diagnostic method.
+- Make Main Zone report distinguish current audio output channels from native speaker-matrix labels when source-dependent audio output is unknown.
+- Classify optional `DC?` timeouts/rejections as warnings rather than breaking the compatibility report; distinguish optional `OPSMLALL` failures and report generic Movie/Music/Game/Direct command candidates when Deviceinfo lacks a family catalog.
+- Show speaker-distance step with finer metric precision and its original receiver unit.
+- Extend offline regression checks for forced-legacy X6700H transport and aggregate speaker channels; preserve all projects as `net48`.
+
+## Unreleased - priority sound / speaker diagnostics
 
 ## Legacy speaker calibration HTML reader (2026-10-20)
 

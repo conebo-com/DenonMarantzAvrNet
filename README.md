@@ -1,4 +1,4 @@
-﻿# DenonMarantzAvrNet
+# DenonMarantzAvrNet
 
 `DenonMarantzAvrNet` is an asynchronous C# library for controlling compatible Denon and Marantz AV receivers through their local HTTP/XML and Telnet interfaces. The repository also contains a WPF tester application for trying out the library against a real receiver.
 
@@ -517,3 +517,8 @@ It is **not** part of the read-only compatibility report. Always record/backup t
 receiver settings before running it; restoration cannot be guaranteed if the receiver
 or network becomes unavailable. The `ONE-PASS Sound family test` also verifies the
 restored `MS?` mode explicitly.
+
+
+### Cross-profile AVC-X6700H compatibility (2026-10-21)
+
+Calibration access now chooses the device-detected physical speaker protocol, not a user-forced compatibility profile; see [X6700H cross-profile report](docs/X6700H-CROSS-PROFILE-COMPATIBILITY.md). The native speaker matrix and currently active audio channels are reported separately, and the dual-subwoofer aggregate is not a physical calibration channel.

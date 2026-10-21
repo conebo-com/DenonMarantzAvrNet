@@ -43,6 +43,7 @@ public sealed class DenonAvrClient : IDisposable
     private static readonly TimeSpan DefaultSpeakerPresetConfirmationTimeout = TimeSpan.FromSeconds(30);
     private IReadOnlyList<string>? _availableInputs;
     private IDenonReceiverProfile? _receiverProfile;
+    private IDenonReceiverProfile? _verifiedSpeakerProfile;
     private DenonSpeakerLevelSnapshot? _speakerLevelSnapshot;
     private bool _requiresSequentialAppCommandRequests;
     private bool _disposed;
@@ -110,7 +111,7 @@ public sealed class DenonAvrClient : IDisposable
     /// A value of zero means that the profile does not expose speaker presets.
     /// </summary>
     public int SpeakerPresetCount =>
-        GetReceiverProfile().SpeakerPresetCount;
+        GetSpeakerTransportProfile().SpeakerPresetCount;
 
     /// <summary>Gets the most recently confirmed receiver state.</summary>
     public DenonReceiverState? State { get; private set; }
@@ -157,6 +158,7 @@ public sealed class DenonAvrClient : IDisposable
                 State = null;
                 _availableInputs = null;
                 _speakerLevelSnapshot = null;
+                _verifiedSpeakerProfile = null;
                 _requiresSequentialAppCommandRequests = false;
                 return deviceInfo;
             }
@@ -318,11 +320,11 @@ public sealed class DenonAvrClient : IDisposable
             AvrFeature.AudioInformation or AvrFeature.ActiveSpeakerStatus =>
                 capabilities.SupportsAppCommand0300 == true,
             AvrFeature.SpeakerPresetLevelControl =>
-                GetReceiverProfile().SupportsSpeakerPresetLevels,
+                GetSpeakerTransportProfile().SupportsSpeakerPresetLevels,
             AvrFeature.SpeakerDistanceControl =>
-                GetReceiverProfile().SupportsSpeakerDistances,
+                GetSpeakerTransportProfile().SupportsSpeakerDistances,
             AvrFeature.SpeakerPresetSelection =>
-                GetReceiverProfile().SupportsSpeakerPresetSelection,
+                GetSpeakerTransportProfile().SupportsSpeakerPresetSelection,
             AvrFeature.MainZonePower or
             AvrFeature.MainZoneVolume or
             AvrFeature.MainZoneMute or
@@ -873,7 +875,7 @@ public sealed class DenonAvrClient : IDisposable
             // <-----------
         }
 
-        return GetReceiverProfile().SpeakerPresetLevels.SetLevelAsync(
+        return GetSpeakerTransportProfile().SpeakerPresetLevels.SetLevelAsync(
             new DenonProfileContext(Host, _httpTransport),
             speakerIndex,
             decibels,
@@ -889,7 +891,7 @@ public sealed class DenonAvrClient : IDisposable
     public Task<DenonSpeakerDiscoveryReport> DiscoverSpeakerIndicesAsync(
         CancellationToken cancellationToken = default)
     {
-        var profile = GetReceiverProfile();
+        var profile = GetSpeakerTransportProfile();
         var options = profile.SpeakerDiscoveryOptions
             ?? throw new NotSupportedException(
                 $"Speaker AJAX discovery is not configured for profile '{profile.Id}'.");
@@ -1085,39 +1087,26 @@ public sealed class DenonAvrClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        var profile = GetReceiverProfile();
-        var channels = new Dictionary<string, DenonCalibrationChannel>(StringComparer.OrdinalIgnoreCase);
+        var profile = GetSpeakerTransportProfile();
         if (profile.SupportsSpeakerPresetLevels && profile.SupportsSpeakerDistances)
         {
-            var context = new DenonProfileContext(Host, _httpTransport);
-            var levels = await profile.SpeakerPresetLevels.GetLevelsAsync(context, cancellationToken)
+            var result = await ReadModernCalibrationAsync(profile, cancellationToken)
                 .ConfigureAwait(false);
-            var distances = await profile.SpeakerDistances.GetDistancesAsync(context, cancellationToken)
-                .ConfigureAwait(false);
-            foreach (var level in levels)
-            {
-                // Do not merge aggregate multichannel pseudo-indices with individual speakers.
-                var native = level.Channel.HasValue && IsSingleChannel(level.Channel.Value)
-                    ? ChannelName(level.Channel.Value) : "LEVEL#" + level.SpeakerIndex;
-                channels[native] = new DenonCalibrationChannel(native, native,
-                    level.Decibels, null, level.SpeakerIndex);
-            }
-            foreach (var distance in distances.Speakers)
-            {
-                var native = distance.Channel.HasValue && IsSingleChannel(distance.Channel.Value)
-                    ? ChannelName(distance.Channel.Value) : "DISTANCE#" + distance.SpeakerIndex;
-                if (channels.TryGetValue(native, out var value))
-                    channels[native] = value with { DistanceMeters = distance.Meters,
-                        DistanceIndex = distance.SpeakerIndex };
-                else
-                    channels[native] = new DenonCalibrationChannel(native, native, null,
-                        distance.Meters, null, distance.SpeakerIndex);
-            }
-            return new DenonSpeakerCalibrationSnapshot("Modern speaker AJAX", DateTimeOffset.UtcNow,
-                channels.Values.OrderBy(x => x.NativeChannelCode).ToArray());
+            _verifiedSpeakerProfile = profile;
+            return result;
         }
 
-        // No model-specific mapping: dynamically check the actual legacy web pages.
+        // Only unknown 0301 receivers are probed for additional modern transports.
+        // A recognized legacy model uses its actual HTML setup pages directly.
+        if (profile.Id == "unknown")
+        {
+            var discovered = await TryDiscoverModernCalibrationAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (discovered is not null)
+                return discovered;
+        }
+
+        var channels = new Dictionary<string, DenonCalibrationChannel>(StringComparer.OrdinalIgnoreCase);
         var legacy = await GetLegacySpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
         foreach (var level in legacy.Levels)
             channels.Add(level.NativeChannelCode, new DenonCalibrationChannel(
@@ -1133,11 +1122,47 @@ public sealed class DenonAvrClient : IDisposable
             channels.Values.OrderBy(x => x.NativeChannelCode).ToArray());
     }
 
-    private static bool IsSingleChannel(SpeakerChannel channel)
+    private async Task<DenonSpeakerCalibrationSnapshot> ReadModernCalibrationAsync(
+        IDenonReceiverProfile profile, CancellationToken cancellationToken)
     {
-        var bits = (ulong)channel;
-        return bits != 0 && (bits & (bits - 1)) == 0;
+        var context = new DenonProfileContext(Host, _httpTransport);
+        var levels = await profile.SpeakerPresetLevels.GetLevelsAsync(context, cancellationToken)
+            .ConfigureAwait(false);
+        var distances = await profile.SpeakerDistances.GetDistancesAsync(context, cancellationToken)
+            .ConfigureAwait(false);
+        var channels = new Dictionary<string, DenonCalibrationChannel>(StringComparer.OrdinalIgnoreCase);
+        foreach (var level in levels)
+        {
+            // A multi-bit channel is a GROUP control (e.g. SW+SW2), not a speaker.
+            // It is still available in GetSpeakerPresetLevelsAsync for diagnostics.
+            if (level.Channel.HasValue && !IsSingleChannel(level.Channel.Value))
+                continue;
+            var native = level.Channel.HasValue
+                ? ChannelName(level.Channel.Value) : "LEVEL#" + level.SpeakerIndex;
+            channels[native] = new DenonCalibrationChannel(native, native,
+                level.Decibels, null, level.SpeakerIndex);
+        }
+        foreach (var distance in distances.Speakers)
+        {
+            if (distance.Channel.HasValue && !IsSingleChannel(distance.Channel.Value))
+                continue;
+            var native = distance.Channel.HasValue
+                ? ChannelName(distance.Channel.Value) : "DISTANCE#" + distance.SpeakerIndex;
+            if (channels.TryGetValue(native, out var value))
+                channels[native] = value with { DistanceMeters = distance.Meters,
+                    DistanceIndex = distance.SpeakerIndex };
+            else
+                channels[native] = new DenonCalibrationChannel(native, native, null,
+                    distance.Meters, null, distance.SpeakerIndex);
+        }
+        if (channels.Count == 0)
+            throw new InvalidDataException("Modern speaker AJAX did not return usable calibration data.");
+        return new DenonSpeakerCalibrationSnapshot("Modern speaker AJAX", DateTimeOffset.UtcNow,
+            channels.Values.OrderBy(x => x.NativeChannelCode).ToArray());
     }
+
+    private static bool IsSingleChannel(SpeakerChannel channel) =>
+        DenonReceiverProfileRegistry.IsPhysicalSpeakerChannel(channel);
 
     private static string ChannelName(SpeakerChannel channel) =>
         SpeakerChannelParser.ToNativeCode(channel);
@@ -1175,11 +1200,12 @@ public sealed class DenonAvrClient : IDisposable
         if (double.IsNaN(decibels) || double.IsInfinity(decibels) ||
             decibels < -12 || decibels > 12 || Math.Abs(decibels * 2 - Math.Round(decibels * 2)) > 0.000001)
             throw new ArgumentOutOfRangeException(nameof(decibels));
-        var profile = GetReceiverProfile();
+        // Resolve/verify the actual calibration transport before deciding whether a legacy POST is allowed.
+        var baseline = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
+        var profile = GetSpeakerTransportProfile();
         if (profile.SupportsSpeakerPresetLevels && profile.SupportsSpeakerDistances)
         {
-            var current = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
-            var channel = current.Channels.SingleOrDefault(x =>
+            var channel = baseline.Channels.SingleOrDefault(x =>
                 string.Equals(x.NativeChannelCode, nativeChannelCode, StringComparison.OrdinalIgnoreCase));
             if (channel is null || channel.LevelIndex is null)
                 throw new ArgumentException("Unknown persistent level channel or index.", nameof(nativeChannelCode));
@@ -1214,11 +1240,12 @@ public sealed class DenonAvrClient : IDisposable
         NetFrameworkCompat.ThrowIfNullOrWhiteSpace(nativeChannelCode, nameof(nativeChannelCode));
         if (double.IsNaN(meters) || double.IsInfinity(meters) || meters <= 0 || meters > 18)
             throw new ArgumentOutOfRangeException(nameof(meters));
-        var profile = GetReceiverProfile();
+        // Resolve/verify the actual calibration transport before deciding whether a legacy POST is allowed.
+        var baseline = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
+        var profile = GetSpeakerTransportProfile();
         if (profile.SupportsSpeakerPresetLevels && profile.SupportsSpeakerDistances)
         {
-            var current = await GetSpeakerCalibrationAsync(cancellationToken).ConfigureAwait(false);
-            var channel = current.Channels.SingleOrDefault(x =>
+            var channel = baseline.Channels.SingleOrDefault(x =>
                 string.Equals(x.NativeChannelCode, nativeChannelCode, StringComparison.OrdinalIgnoreCase));
             if (channel is null || channel.DistanceIndex is null)
                 throw new ArgumentException("Unknown persistent distance channel or index.", nameof(nativeChannelCode));
@@ -1281,7 +1308,7 @@ public sealed class DenonAvrClient : IDisposable
     /// <summary>Reads the active speaker-preset levels using the selected receiver profile.</summary>
     public Task<IReadOnlyList<DenonSpeakerPresetLevel>> GetSpeakerPresetLevelsAsync(
         CancellationToken cancellationToken = default) =>
-        GetReceiverProfile().SpeakerPresetLevels.GetLevelsAsync(
+        GetSpeakerTransportProfile().SpeakerPresetLevels.GetLevelsAsync(
             new DenonProfileContext(Host, _httpTransport),
             cancellationToken);
 
@@ -1291,7 +1318,7 @@ public sealed class DenonAvrClient : IDisposable
     public async Task<DenonSpeakerLevelSnapshot> CreateSpeakerLevelSnapshotAsync(
         CancellationToken cancellationToken = default)
     {
-        var profile = GetReceiverProfile();
+        var profile = GetSpeakerTransportProfile();
 
         var levels = await profile.SpeakerPresetLevels
             .GetLevelsAsync(
@@ -1326,7 +1353,7 @@ public sealed class DenonAvrClient : IDisposable
     {
         NetFrameworkCompat.ThrowIfNull(snapshot, nameof(snapshot));
 
-        var profile = GetReceiverProfile();
+        var profile = GetSpeakerTransportProfile();
 
         if (!string.Equals(
             snapshot.ReceiverProfileId,
@@ -1379,7 +1406,7 @@ public sealed class DenonAvrClient : IDisposable
     /// </summary>
     public Task<DenonSpeakerDistanceConfiguration> GetSpeakerDistancesAsync(
         CancellationToken cancellationToken = default) =>
-        GetReceiverProfile()
+        GetSpeakerTransportProfile()
             .SpeakerDistances
             .GetDistancesAsync(
                 new DenonProfileContext(
@@ -1411,7 +1438,7 @@ public sealed class DenonAvrClient : IDisposable
             // <-----------
         }
 
-        return GetReceiverProfile()
+        return GetSpeakerTransportProfile()
             .SpeakerDistances
             .SetDistanceAsync(
                 new DenonProfileContext(
@@ -1435,7 +1462,7 @@ public sealed class DenonAvrClient : IDisposable
     public async Task<IReadOnlyList<DenonConfiguredSpeaker>> GetConfiguredSpeakersAsync(
     CancellationToken cancellationToken = default)
     {
-        var profile = GetReceiverProfile();
+        var profile = GetSpeakerTransportProfile();
 
         if (!profile.SupportsSpeakerPresetLevels || !profile.SupportsSpeakerDistances)
         {
@@ -1527,7 +1554,7 @@ public sealed class DenonAvrClient : IDisposable
     /// </summary>
     public Task<int> GetActiveSpeakerPresetAsync(
         CancellationToken cancellationToken = default) =>
-        GetReceiverProfile()
+        GetSpeakerTransportProfile()
             .SpeakerPresetSelection
             .GetActivePresetAsync(
                 new DenonProfileContext(
@@ -1551,7 +1578,7 @@ public sealed class DenonAvrClient : IDisposable
         TimeSpan? confirmationTimeout = null,
         CancellationToken cancellationToken = default)
     {
-        var profile = GetReceiverProfile();
+        var profile = GetSpeakerTransportProfile();
 
         // Unsupported profiles report NotSupportedException from their provider instead.
         if (profile.SupportsSpeakerPresetSelection &&
@@ -1694,6 +1721,60 @@ public sealed class DenonAvrClient : IDisposable
             SupportsZone2: zoneCount is >= 2,
             SupportsZone3: zoneCount is >= 3,
             ZoneCount: zoneCount);
+    }
+
+    /// <summary>
+    /// Physical speaker transport is based on device-reported identity or a successfully
+    /// probed speaker endpoint, NOT the optional user-selected compatibility profile.
+    /// An X6700H forced into legacy-goform must keep its HTTPS speaker configuration.
+    /// </summary>
+    private IDenonReceiverProfile GetSpeakerTransportProfile()
+    {
+        var selected = GetReceiverProfile();
+        if (_verifiedSpeakerProfile is not null)
+            return _verifiedSpeakerProfile;
+        if (DeviceInfo is null || !HttpPort.HasValue)
+            return selected;
+        return DenonReceiverProfileRegistry.SelectSpeakerTransportProfile(
+            DeviceInfo, HttpPort.Value, selected);
+    }
+
+    /// <summary>
+    /// An unknown API-0301 receiver may share an existing HTTPS/HTTP speaker protocol.
+    /// Check actual read-only level and distance replies before enabling that provider.
+    /// Bounded probes never run for a known legacy/port-80 receiver.
+    /// </summary>
+    private async Task<DenonSpeakerCalibrationSnapshot?> TryDiscoverModernCalibrationAsync(
+        CancellationToken cancellationToken)
+    {
+        if (HttpPort != 8080 || DeviceInfo is null ||
+            !string.Equals(DeviceInfo.CommunicationApiVersion, "0301", StringComparison.Ordinal))
+            return null;
+
+        foreach (var candidate in DenonReceiverProfileRegistry.ModernCalibrationProfiles)
+        {
+            using (var probe = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                probe.CancelAfter(TimeSpan.FromSeconds(3));
+                try
+                {
+                    var result = await ReadModernCalibrationAsync(candidate, probe.Token).ConfigureAwait(false);
+                    if (result.Channels.Any(x => x.LevelDecibels.HasValue) &&
+                        result.Channels.Any(x => x.DistanceMeters.HasValue))
+                    {
+                        _verifiedSpeakerProfile = candidate;
+                        return result;
+                    }
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested &&
+                    (ex is HttpRequestException || ex is IOException || ex is InvalidDataException ||
+                     ex is OperationCanceledException || ex is System.Xml.XmlException))
+                {
+                    // Candidate is not verified; never classify it as supported.
+                }
+            }
+        }
+        return null;
     }
 
     private IDenonReceiverProfile GetReceiverProfile()

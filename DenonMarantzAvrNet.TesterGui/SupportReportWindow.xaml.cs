@@ -1,4 +1,4 @@
-﻿using DenonMarantzAvrNet;
+using DenonMarantzAvrNet;
 using DenonMarantzAvrNet.Exceptions;
 using DenonMarantzAvrNet.Models;
 using System.Collections.ObjectModel;
@@ -209,7 +209,7 @@ namespace DenonMarantzAvrNet.TesterGui
             new("Telnet", "Mute (MU?)", token => TelnetQueryAsync(_telnetClient.QueryMuteAsync, token)),
             new("Telnet", "Input (SI?)", token => TelnetQueryAsync(_telnetClient.QueryInputAsync, token)),
             new("Telnet", "Surround mode (MS?)", token => TelnetQueryAsync(_telnetClient.QuerySurroundModeAsync, token)),
-            new("Telnet", "Digital input mode (DC?)", token => TelnetQueryAsync(_telnetClient.QueryDigitalInputModeAsync, token)),
+            new("Telnet", "Digital input mode (DC?)", ReadOptionalDigitalInputModeAsync),
             new("Telnet", "Zone 2 (Z2?)", token => ZoneQueryAsync(2, _telnetClient.QueryZone2Async, token)),
             new("Telnet", "Zone 3 (Z3?)", token => ZoneQueryAsync(3, _telnetClient.QueryZone3Async, token))
         ];
@@ -237,8 +237,33 @@ namespace DenonMarantzAvrNet.TesterGui
             builder.AppendLine($"Audio format: {state.Audio?.AudioFormat ?? "unknown"}");
             builder.AppendLine($"Sound mode:   {state.Audio?.SoundMode ?? "unknown"}");
             builder.AppendLine($"Sample rate:  {state.Audio?.SampleRate ?? "unknown"}");
-            builder.AppendLine(
-                $"Speakers:     {(state.Audio is null || state.Audio.ActiveSpeakers.Count == 0 ? "unknown/none" : string.Join(", ", state.Audio.ActiveSpeakers))}");
+            var activeSpeakers = state.Audio?.ActiveSpeakers;
+            builder.AppendLine($"Active audio channels: {(activeSpeakers is null || activeSpeakers.Count == 0 ? "unknown (no channel status reported)" : string.Join(", ", activeSpeakers))}");
+            if (activeSpeakers is null || activeSpeakers.Count == 0)
+            {
+                // Matrix labels describe configured positions, not active audio.
+                // Keep both concepts separate instead of claiming no speakers exist.
+                try
+                {
+                    var matrix = await _client.DiscoverSpeakerMatrixAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    var labels = matrix.Slots
+                        .Select(slot => slot.Label)
+                        .Where(label => !string.IsNullOrWhiteSpace(label))
+                        .Select(label => label!)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    if (labels.Length > 0)
+                        builder.AppendLine("Native speaker positions (not active audio): " +
+                            string.Join(", ", labels.Select(SafeAdjustmentToken)));
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested &&
+                    (ex is HttpRequestException || ex is IOException ||
+                     ex is InvalidDataException || ex is OperationCanceledException))
+                {
+                    builder.AppendLine("Native speaker positions: not confirmed by optional probe.");
+                }
+            }
             AppendZone(builder, "Zone 2", state.Zone2);
             AppendZone(builder, "Zone 3", state.Zone3);
 
@@ -346,7 +371,10 @@ namespace DenonMarantzAvrNet.TesterGui
             var configuration = await _client.GetSpeakerDistancesAsync(cancellationToken);
 
             var builder = new StringBuilder();
-            builder.AppendLine($"Receiver unit: {configuration.ReceiverUnit}, step: {FormatMeters(configuration.Step)}");
+            builder.AppendLine($"Receiver unit: {configuration.ReceiverUnit}, " +
+                $"step: {configuration.Step.ToString("0.0000", CultureInfo.InvariantCulture)} m " +
+                $"({(configuration.ReceiverUnit == DenonSpeakerDistanceUnit.Feet ? (configuration.Step / 0.3048) : configuration.Step).ToString("0.00", CultureInfo.InvariantCulture)} " +
+                $"{(configuration.ReceiverUnit == DenonSpeakerDistanceUnit.Feet ? "ft" : "m")})");
             builder.AppendLine($"{"Index",5}  {"Channel",-24} {"Distance",10}");
             foreach (var speaker in configuration.Speakers)
             {
@@ -500,10 +528,13 @@ namespace DenonMarantzAvrNet.TesterGui
                         $"{(mode.IsActive ? "active" : "-")} {SafeCatalogText(mode.DisplayName)}");
                 return Ok(builder.ToString().TrimEnd());
             }
-            catch (Exception exception) when (exception is IOException ||
-                exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
+                (exception is IOException || exception is OperationCanceledException))
             {
-                return Warning("OPSMLALL not verified on this receiver: " + exception.GetType().Name);
+                return Warning(exception is IOException && exception.Message.Contains("@UNDEFINED")
+                    ? "OPSMLALL explicitly rejected; mode family commands and MS? remain available."
+                    : "OPSMLALL optional list unavailable (no complete response or connection reset); " +
+                      "this does not disable Movie/Music/Game/Direct.");
             }
         }
 
@@ -514,9 +545,16 @@ namespace DenonMarantzAvrNet.TesterGui
             builder.AppendLine("Main-Zone sound mode family shortcuts from Deviceinfo.xml:");
             foreach (var family in catalog.SoundModeFamilies)
                 builder.AppendLine("  " + SafeCatalogText(family));
+            if (catalog.SoundModeFamilies.Count == 0)
+            {
+                builder.AppendLine("No family shortcuts listed in Deviceinfo.xml. " +
+                    "Generic Telnet command candidates: MSMOVIE, MSMUSIC, MSGAME, MSDIRECT, MSPURE DIRECT.");
+                builder.AppendLine("Presence of these commands in the library does not prove receiver support; " +
+                    "the optional one-pass switch/readback test verifies them individually.");
+                return Warning(builder.ToString().TrimEnd());
+            }
             builder.AppendLine("Advertised shortcut != verified mode selection; no commands sent.");
-            return catalog.SoundModeFamilies.Count == 0
-                ? Warning(builder.ToString().TrimEnd()) : Ok(builder.ToString().TrimEnd());
+            return Ok(builder.ToString().TrimEnd());
         }
 
         private async Task<OperationResult> ReadLegacyHttpDiscoveryAsync(CancellationToken cancellationToken)
@@ -684,6 +722,36 @@ namespace DenonMarantzAvrNet.TesterGui
             var response = await query(cancellationToken);
             return Ok($"Response: {response}");
             // <-----------
+        }
+
+        /// <summary>
+        /// DC? is optional on some later firmwares/input configurations. Distinguish
+        /// an unanswered optional command from a loss of general AVR connectivity.
+        /// </summary>
+        private async Task<OperationResult> ReadOptionalDigitalInputModeAsync(
+            CancellationToken cancellationToken)
+        {
+            using (var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                limit.CancelAfter(TimeSpan.FromSeconds(3));
+                try
+                {
+                    return await TelnetQueryAsync(_telnetClient.QueryDigitalInputModeAsync,
+                        limit.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    return Warning("DC? did not answer within 3 seconds; other Telnet features may still work.");
+                }
+                catch (IOException exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    var notDefined = exception.Message.Contains("@UNDEFINED") ||
+                        exception.Message.Contains("@RESTRICTED");
+                    return Warning(notDefined
+                        ? "DC? explicitly rejected by the receiver (optional query)."
+                        : "DC? received no usable reply or the Telnet session was reset; optional query not verified.");
+                }
+            }
         }
 
         private async Task<OperationResult> ZoneQueryAsync(

@@ -48,6 +48,29 @@ internal static class DenonReceiverProfileRegistry
             : Unknown;
     }
 
+    /// <summary>
+    /// Speaker setup transport follows the RECEIVER's identity, even when a user
+    /// explicitly overrides the general-purpose compatibility profile.
+    /// Unknown devices are left unknown until a real endpoint is verified.
+    /// </summary>
+    internal static IDenonReceiverProfile SelectSpeakerTransportProfile(
+        DenonDeviceInfo deviceInfo, int httpPort, IDenonReceiverProfile selectedProfile)
+    {
+        NetFrameworkCompat.ThrowIfNull(deviceInfo, nameof(deviceInfo));
+        NetFrameworkCompat.ThrowIfNull(selectedProfile, nameof(selectedProfile));
+        // Deliberately do not use selectedProfile: it may be an artificial GUI override.
+        return Select(deviceInfo, httpPort);
+    }
+
+    internal static bool IsPhysicalSpeakerChannel(SpeakerChannel channel)
+    {
+        var bits = (ulong)channel;
+        return bits != 0 && (bits & (bits - 1)) == 0;
+    }
+
+    internal static IReadOnlyList<IDenonReceiverProfile> ModernCalibrationProfiles { get; } =
+        new IDenonReceiverProfile[] { X6800, X6700 };
+
     internal static IDenonReceiverProfile? FindById(string profileId)
     {
         NetFrameworkCompat.ThrowIfNull(profileId, nameof(profileId));

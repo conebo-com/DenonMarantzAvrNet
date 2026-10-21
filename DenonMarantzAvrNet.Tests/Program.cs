@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
@@ -35,6 +35,8 @@ internal static class Program
             TestExactModeRestoration();
             TestTelnetLoopbackSession();
             TestReceiverProfileSelection();
+            TestSpeakerTransportIgnoresForcedCompatibilityProfile();
+            TestCombinedSpeakerGroupClassification();
             TestAppCommandResponseClassification();
             TestAppCommandPort80Discovery();
             TestLegacyInspectionWithoutLeakingValues();
@@ -53,7 +55,7 @@ internal static class Program
             TestLegacyCalibrationGetOnly();
             TestUnifiedCalibrationPayloads();
             TestCanonicalSpeakerChannelCodes();
-            Console.WriteLine("Discovery/transport: 28 tests passed.");
+            Console.WriteLine("Discovery/transport: 30 tests passed.");
             return 0;
         }
         catch (Exception exception)
@@ -462,6 +464,40 @@ internal static class Program
         var device = new DenonDeviceInfo("*AVR-X4100W", "*AVR-X4100W", "0300", 3, null, null);
         Check(DenonReceiverProfileRegistry.Select(device, 80).Id == "legacy-goform",
             "X4100W must not be assigned an X6700H speaker AJAX profile.");
+    }
+
+    private static void TestSpeakerTransportIgnoresForcedCompatibilityProfile()
+    {
+        var forcedLegacy = DenonReceiverProfileRegistry.FindById("legacy-goform")!;
+        var x6700 = new DenonDeviceInfo("AVC-X6700H", "AVC-X6700H", "0301", 3, null, null);
+        var resolved = DenonReceiverProfileRegistry.SelectSpeakerTransportProfile(x6700, 8080, forcedLegacy);
+        Check(resolved.Id == "avc-x6700h" && resolved.SupportsSpeakerDistances &&
+            resolved.SupportsSpeakerPresetLevels && resolved.SupportsSpeakerPresetSelection,
+            "Forced legacy compatibility must not disable verified X6700H speaker capabilities.");
+        var x4100 = new DenonDeviceInfo("*AVR-X4100W", "*AVR-X4100W", "0300", 3, null, null);
+        var forcedModern = DenonReceiverProfileRegistry.FindById("avc-x6700h")!;
+        Check(DenonReceiverProfileRegistry.SelectSpeakerTransportProfile(x4100, 80, forcedModern).Id == "legacy-goform",
+            "Force-selecting a modern profile must not cause AJAX writes to an X4100W.");
+        var unknown = new DenonDeviceInfo("NEW-RECEIVER", "NEW-RECEIVER", "0301", 3, null, null);
+        Check(DenonReceiverProfileRegistry.SelectSpeakerTransportProfile(unknown, 8080, forcedLegacy).Id == "unknown",
+            "Unknown speakers must require an actual HTTP endpoint probe, not assume support.");
+    }
+
+    private static void TestCombinedSpeakerGroupClassification()
+    {
+        Check(!DenonReceiverProfileRegistry.IsPhysicalSpeakerChannel(
+                SpeakerChannel.Subwoofer | SpeakerChannel.Subwoofer2) &&
+            DenonReceiverProfileRegistry.IsPhysicalSpeakerChannel(SpeakerChannel.Subwoofer) &&
+            DenonReceiverProfileRegistry.IsPhysicalSpeakerChannel(SpeakerChannel.Subwoofer2) &&
+            !DenonReceiverProfileRegistry.IsPhysicalSpeakerChannel(SpeakerChannel.None),
+            "Combined subwoofer level is a group entry, not a physical third subwoofer.");
+        Check(DenonSpeakerPresetIndexConverter.TryToSpeakerChannel(30, out var sw1) &&
+            DenonReceiverProfileRegistry.IsPhysicalSpeakerChannel(sw1) &&
+            DenonSpeakerPresetIndexConverter.TryToSpeakerChannel(31, out var sw2) &&
+            DenonReceiverProfileRegistry.IsPhysicalSpeakerChannel(sw2) &&
+            DenonSpeakerPresetIndexConverter.TryToSpeakerChannel(32, out var swGroup) &&
+            !DenonReceiverProfileRegistry.IsPhysicalSpeakerChannel(swGroup),
+            "X6700H indices 30 and 31 are physical SW channels, while 32 is an aggregate control.");
     }
 
     private static void TestAppCommandResponseClassification()
