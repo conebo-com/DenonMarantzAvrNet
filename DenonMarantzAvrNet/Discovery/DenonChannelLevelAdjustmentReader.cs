@@ -29,7 +29,8 @@ internal static class DenonChannelLevelAdjustmentReader
                 string? Get(string name) => ch.Elements().FirstOrDefault(e =>
                     DenonDeviceCapabilityReader.Is(e, name))?.Value.Trim();
                 var code = Get("name");
-                if (string.IsNullOrEmpty(code) || code.Length > 12 ||
+
+                if (code == null || string.IsNullOrEmpty(code) || code.Length > 12 ||
                     !code.All(c => char.IsLetterOrDigit(c) || c == '_')) continue;
                 result.Add(new DenonChannelLevelAdjustment(code,
                     Get("status"), Get("sptype"), Get("level"), Get("value")));

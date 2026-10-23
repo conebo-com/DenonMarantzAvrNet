@@ -24,5 +24,11 @@ public enum AvrFeature
     SurroundModeControl,
     DigitalInputModeControl,
     /// <summary>Reads and switches the active speaker preset through the receiver's speaker setup web API.</summary>
-    SpeakerPresetSelection
+    SpeakerPresetSelection,
+
+    // Zone power and input are Telnet-only; Zone2Control/Zone3Control cover volume and mute.
+    Zone2Power,
+    Zone2Input,
+    Zone3Power,
+    Zone3Input
 }

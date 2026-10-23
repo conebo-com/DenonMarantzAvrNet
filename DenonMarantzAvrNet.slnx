@@ -1,4 +1,12 @@
 <Solution>
-  <Project Path="DenonMarantzAvrNet/DenonMarantzAvrNet.csproj" />
-  <Project Path="DenonMarantzAvrNet.TesterGui/DenonMarantzAvrNet.TesterGui.csproj" Id="39151e0c-f95b-41d7-83ae-62400078b0a8" />
+  <Project Path="DenonMarantzAvrNet/DenonMarantzAvrNet.csproj">
+    <Platform Solution="*|x86" Project="x86" />
+  </Project>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="DenonMarantzAvrNet.TesterGui/DenonMarantzAvrNet.TesterGui.csproj" Id="39151e0c-f95b-41d7-83ae-62400078b0a8">
+    <Platform Solution="*|x86" Project="x86" />
+  </Project>
 </Solution>

@@ -10,6 +10,7 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<UseWPF>true</UseWPF>
 		<AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+		<Platforms>AnyCPU;x86</Platforms>
 	</PropertyGroup>
 	
 	<ItemGroup>

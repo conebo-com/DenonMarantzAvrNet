@@ -47,6 +47,32 @@ internal sealed class DenonTelnetSession
         if (client is not null) DropConnection(client);
     }
 
+    internal bool TryClose()
+    {
+        if (Volatile.Read(ref _listenerCount) > 0)
+            return false;
+        // <-----------
+
+        // Holding the command gate prevents a command from starting while the connection is dropped.
+        if (!_commandGate.Wait(0))
+            return false;
+        // <-----------
+
+        try
+        {
+            if (Volatile.Read(ref _listenerCount) > 0)
+                return false;
+            // <-----------
+
+            TcpClient? client;
+            lock (_sync) { client = _client; }
+            if (client is not null) DropConnection(client);
+            return true;
+            // <-----------
+        }
+        finally { _commandGate.Release(); }
+    }
+
     internal async Task EnsureConnectedAsync(CancellationToken cancellationToken)
     {
         await _connectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
